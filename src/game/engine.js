@@ -24,6 +24,8 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { CameraLookShader } from './cameraLook.js';
 
 const CAMERA_MODES = ['CHASE', 'HOOD', 'BUMPER', 'DESK TOP'];
 
@@ -234,6 +236,10 @@ export class GameEngine {
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
       composer.addPass(new SMAAPass(w * Q.pixelRatio, h * Q.pixelRatio));
+      // camera finish: lens fringing, filmic grade, vignette and grain
+      this.cameraLook = new ShaderPass(CameraLookShader);
+      this.cameraLook.uniforms.resolution.value.set(w * Q.pixelRatio, h * Q.pixelRatio);
+      composer.addPass(this.cameraLook);
       this.composer = composer;
     } catch (e) {
       console.warn('Post-processing unavailable, rendering directly', e);
@@ -1000,6 +1006,11 @@ export class GameEngine {
     this.updateHUD();
 
     if (!render) return;
+    if (this.cameraLook) {
+      this.cameraLook.uniforms.time.value = this.elapsed;
+      const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+      this.cameraLook.uniforms.resolution.value.copy(size);
+    }
     if (this.composer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
   }

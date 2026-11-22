@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { getCityWaypointVectors } from './cities.js';
+import { buildStreetCircuit } from './streetCircuit.js';
 
 export const ROAD_WIDTH = 15.0;
 export const ROAD_HALF_WIDTH = ROAD_WIDTH * 0.5;
@@ -139,24 +140,26 @@ function createRoadMaps() {
   return { map: make(color, true), bumpMap: make(bump, false), roughnessMap: make(rough, false) };
 }
 
-function createKerbTexture() {
-  // FIA red/white kerb with worn paint and rubber marks
+function createGutterTexture() {
+  // Concrete drainage gutter: grey slabs with joints, darker where water runs
   const canvas = document.createElement('canvas');
   canvas.width = 64;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  const stripeH = 128;
-  for (let i = 0; i < 2; i++) {
-    ctx.fillStyle = i % 2 === 0 ? '#c4161c' : '#ecebe6';
-    ctx.fillRect(0, i * stripeH, 64, stripeH);
+  ctx.fillStyle = '#8f8c85';
+  ctx.fillRect(0, 0, 64, 256);
+  for (let k = 0; k < 1100; k++) {
+    const v = 105 + Math.random() * 70;
+    ctx.fillStyle = `rgba(${v},${v},${v - 6},0.45)`;
+    ctx.fillRect(Math.random() * 64, Math.random() * 256, 1 + Math.random() * 2, 1 + Math.random() * 2);
   }
-  for (let k = 0; k < 900; k++) {
-    ctx.fillStyle = Math.random() > 0.5 ? 'rgba(40,40,40,0.18)' : 'rgba(255,255,255,0.08)';
-    ctx.fillRect(Math.random() * 64, Math.random() * 256, 1 + Math.random() * 3, 1 + Math.random() * 3);
+  for (let y = 0; y < 256; y += 64) {
+    ctx.fillStyle = 'rgba(40,40,38,0.55)';
+    ctx.fillRect(0, y, 64, 2);
   }
   const g = ctx.createLinearGradient(0, 0, 64, 0);
-  g.addColorStop(0, 'rgba(0,0,0,0.25)');
-  g.addColorStop(0.4, 'rgba(0,0,0,0)');
+  g.addColorStop(0, 'rgba(20,20,20,0.35)');
+  g.addColorStop(0.45, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 256);
   const tex = new THREE.CanvasTexture(canvas);
@@ -397,8 +400,8 @@ export class RaceTrack {
     roadMesh.receiveShadow = true;
     this.group.add(roadMesh);
 
-    // 2. Raised Indian Highway Kerbs + Outer Deck Skirt
-    const kerbMat = new THREE.MeshStandardMaterial({ map: createKerbTexture(), roughness: 0.7, metalness: 0 });
+    // 2. Concrete gutters along both edges (red/white kerbs are laid over them in the corners) + deck skirt
+    const kerbMat = new THREE.MeshStandardMaterial({ map: createGutterTexture(), roughness: 0.85, metalness: 0 });
     const skirtMat = new THREE.MeshStandardMaterial({ color: 0x9a968e, roughness: 0.9, metalness: 0 });
 
     for (const side of [-1, 1]) {
@@ -601,17 +604,19 @@ export class RaceTrack {
           block.receiveShadow = true;
           this.group.add(block);
         }
-        // High-visibility red/white corner safety barrier markers outside tight bends
-        if (s.curvature > 0.30 && i % 6 === 0) {
+        // (corner chevrons are now painted on the barrier walls — see streetCircuit.js)
+        if (s.curvature > 0.30 && i % 6 === 0 && s.point.y > 1.1) {
           const barrier = new THREE.Mesh(chevronGeo, apexToggle ? apexRed : apexWhite);
           barrier.position.copy(s.point).addScaledVector(s.right, halfW + 2.35);
           barrier.position.y += 0.62;
           barrier.quaternion.copy(q);
-          barrier.castShadow = true;
           this.group.add(barrier);
         }
       }
     }
+
+    // Street-circuit dressing: walls, catch fences, corner kerbs, footpaths, road markings
+    buildStreetCircuit(this, this.group, this.city, halfW, kerbW);
 
     // 7. Glowing Boost Pads
     const padTex = createBoostPadTexture(this.city.accentHex, this.city.secondaryHex);

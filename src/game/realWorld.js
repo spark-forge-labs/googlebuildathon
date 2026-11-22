@@ -808,9 +808,11 @@ export function buildRealWorld(group, city, track, avoid = []) {
   buildFlyoverPiers(group, track);
   const standFootprint = buildCrowdStands(group, track);
   const fullAvoid = [...avoid, standFootprint];
+  // Continuous street frontage just behind the barrier walls and footpaths
+  const frontage = buildFrontage(group, r, a, city, track, fullAvoid);
   buildSkyline(group, r, a);
   buildHills(group, r, a);
-  buildTrees(group, r, a, track, fullAvoid);
+  buildTrees(group, r, a, track, [...fullAvoid, ...frontage]);
 
   return anim;
 }
@@ -835,6 +837,272 @@ function buildFlyoverPiers(group, track) {
     cap.rotateY(Math.PI / 2);
     group.add(cap);
   }
+}
+
+/* ---------- Street frontage ---------- */
+let shopCache = null;
+/** Ground-floor shops: glazing, doors, fascia signs and awnings (4 shops per tile, ~18 units). */
+function shopfrontTextures() {
+  if (shopCache) return shopCache;
+  const mk = (words, seed) => {
+    const W = 1024;
+    const H = 256;
+    const cv = document.createElement('canvas');
+    cv.width = W;
+    cv.height = H;
+    const g = cv.getContext('2d');
+    const rc = document.createElement('canvas');
+    rc.width = W / 4;
+    rc.height = H / 4;
+    const rg = rc.getContext('2d');
+    const r = rand(seed);
+    g.fillStyle = '#d8d2c6';
+    g.fillRect(0, 0, W, H);
+    rg.fillStyle = 'rgb(225,225,225)';
+    rg.fillRect(0, 0, W / 4, H / 4);
+    const sw = W / 4;
+    const signCols = ['#7f1d1d', '#14532d', '#1e3a8a', '#78350f', '#111827', '#831843', '#0f766e', '#a16207'];
+    for (let k = 0; k < 4; k++) {
+      const x = k * sw;
+      // pilasters between shops
+      g.fillStyle = '#bdb5a6';
+      g.fillRect(x, 0, 10, H);
+      // fascia sign
+      const col = signCols[(r() * signCols.length) | 0];
+      g.fillStyle = col;
+      g.fillRect(x + 14, 22, sw - 28, 48);
+      g.fillStyle = '#f8f4ea';
+      g.font = '800 30px system-ui, "Noto Sans", "Noto Sans Devanagari", Arial, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(words[(k + seed) % words.length], x + sw / 2, 47, sw - 50);
+      // striped awning
+      const awn = r() < 0.6;
+      if (awn) {
+        for (let st = 0; st < 10; st++) {
+          g.fillStyle = st % 2 ? '#f2efe6' : col;
+          g.beginPath();
+          g.moveTo(x + 14 + (st * (sw - 28)) / 10, 74);
+          g.lineTo(x + 14 + ((st + 1) * (sw - 28)) / 10, 74);
+          g.lineTo(x + 10 + ((st + 1) * (sw - 20)) / 10, 102);
+          g.lineTo(x + 10 + (st * (sw - 20)) / 10, 102);
+          g.closePath();
+          g.fill();
+        }
+      }
+      // shop window with reflections and goods
+      const wy = awn ? 104 : 80;
+      g.fillStyle = '#1f2830';
+      g.fillRect(x + 18, wy, sw - 36, H - wy - 14);
+      rg.fillStyle = 'rgb(30,30,30)';
+      rg.fillRect((x + 18) / 4, wy / 4, (sw - 36) / 4, (H - wy - 14) / 4);
+      for (let i = 0; i < 14; i++) {
+        g.fillStyle = `hsla(${(r() * 360) | 0},40%,${45 + r() * 25}%,0.55)`;
+        g.fillRect(x + 26 + r() * (sw - 60), H - 40 - r() * 60, 8 + r() * 22, 8 + r() * 30);
+      }
+      const ref = g.createLinearGradient(x, wy, x + sw, H);
+      ref.addColorStop(0, 'rgba(200,215,225,0.28)');
+      ref.addColorStop(0.5, 'rgba(200,215,225,0.04)');
+      ref.addColorStop(1, 'rgba(200,215,225,0.18)');
+      g.fillStyle = ref;
+      g.fillRect(x + 18, wy, sw - 36, H - wy - 14);
+      // door
+      const dx = x + (k % 2 ? sw - 70 : 30);
+      g.fillStyle = '#3b2f25';
+      g.fillRect(dx, wy + 8, 40, H - wy - 22);
+      g.fillStyle = 'rgba(190,205,215,0.35)';
+      g.fillRect(dx + 6, wy + 14, 28, (H - wy) * 0.45);
+      g.fillStyle = '#9a9286';
+      g.fillRect(x, H - 14, sw, 14); // stall riser / step
+    }
+    const map = keep(new THREE.CanvasTexture(cv));
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.wrapS = map.wrapT = THREE.RepeatWrapping;
+    map.anisotropy = 8;
+    const rough = keep(new THREE.CanvasTexture(rc));
+    rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
+    return { map, rough };
+  };
+  shopCache = {
+    india: mk(['CHAI', 'MEDICAL', 'SWEETS', 'MOBILE', 'TAILOR', 'BOOKS', 'JEWELLERS', 'TIFFIN'], 3),
+    world: mk(['CAFÉ', 'PHARMACY', 'BAKERY', 'DELI', 'BOOKS', 'FLOWERS', 'BISTRO', 'NEWS'], 7),
+  };
+  return shopCache;
+}
+
+function pointInPolygon(poly, x, z) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, zi] = poly[i];
+    const [xj, zj] = poly[j];
+    if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Buildings shoulder to shoulder along the outside of the circuit, shops at street level,
+ * so the race runs through city streets instead of open ground. Returns footprints for tree placement.
+ */
+function buildFrontage(group, r, a, city, track, avoid) {
+  const facades = facadeTextures().all;
+  const shops = shopfrontTextures()[city.region === 'world' ? 'world' : 'india'];
+  const S = track.samples;
+  const N = S.length;
+  const poly = S.map((s) => [s.point.x, s.point.z]);
+  const lap = track.totalLength;
+  const step = lap / N;
+  const prof = a.skyline;
+  const styles = prof.styles.map((w, i) => (i === 0 ? w * 0.45 : w)); // fewer curtain-wall towers at street level
+  const tall = prof.maxH >= 40;
+  const hMin = a.roofs === 'mansard' ? 14 : tall ? 11 : 8;
+  const hMax = a.roofs === 'mansard' ? 18 : THREE.MathUtils.clamp(prof.maxH * 0.3, 14, 42);
+  const FRONT = 17.2; // building line, behind the 16.5 footpath edge
+  const SHOP_H = 4.2;
+  const max = Q.tier === 'low' ? 70 : 120;
+
+  const unit = new THREE.BoxGeometry(1, 1, 1);
+  unit.translate(0, 0.5, 0);
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x8a8780, roughness: 0.95 });
+  const meshes = {};
+  const getUpper = (style) => {
+    if (meshes[style]) return meshes[style];
+    const map = facades[style].map.clone();
+    map.userData = {};
+    map.repeat.set(11 / 14, ((hMin + hMax) / 2 - SHOP_H) / 14);
+    map.needsUpdate = true;
+    const rough = facades[style].rough.clone();
+    rough.userData = {};
+    rough.repeat.copy(map.repeat);
+    rough.needsUpdate = true;
+    const side = new THREE.MeshStandardMaterial({
+      map,
+      roughnessMap: rough,
+      roughness: 1,
+      metalness: style === 'glass' ? 0.55 : 0.02,
+      envMapIntensity: style === 'glass' ? 1.4 : 0.6,
+    });
+    const m = new THREE.InstancedMesh(unit, [side, side, roofMat, roofMat, side, side], max);
+    m.count = 0;
+    m.castShadow = Q.tier !== 'low';
+    m.receiveShadow = true;
+    meshes[style] = m;
+    group.add(m);
+    return m;
+  };
+  const shopMap = shops.map.clone();
+  shopMap.userData = {};
+  shopMap.repeat.set(11 / 18, 1);
+  shopMap.needsUpdate = true;
+  const shopRough = shops.rough.clone();
+  shopRough.userData = {};
+  shopRough.repeat.copy(shopMap.repeat);
+  shopRough.needsUpdate = true;
+  const shopSide = new THREE.MeshStandardMaterial({ map: shopMap, roughnessMap: shopRough, roughness: 1, envMapIntensity: 0.8 });
+  const shopMesh = new THREE.InstancedMesh(unit, [shopSide, shopSide, roofMat, roofMat, shopSide, shopSide], max);
+  shopMesh.count = 0;
+  shopMesh.receiveShadow = true;
+  shopMesh.castShadow = Q.tier !== 'low';
+  const corniceMat = new THREE.MeshStandardMaterial({ color: 0xcfc8ba, roughness: 0.85 });
+  const cornices = new THREE.InstancedMesh(unit, corniceMat, max);
+  cornices.count = 0;
+  const mansardGeo = new THREE.CylinderGeometry(0.5, 0.707, 1, 4, 1);
+  mansardGeo.rotateY(Math.PI / 4);
+  mansardGeo.translate(0, 0.5, 0);
+  const mansards = new THREE.InstancedMesh(
+    mansardGeo,
+    new THREE.MeshStandardMaterial({ color: 0x5d6672, roughness: 0.45, metalness: 0.45, flatShading: true }),
+    a.roofs === 'mansard' ? max : 1
+  );
+  mansards.count = 0;
+  group.add(shopMesh, cornices, mansards);
+
+  const dummy = new THREE.Object3D();
+  const col = new THREE.Color();
+  const footprints = [];
+  const clearOf = (x, z, minD) => {
+    for (let i = 0; i < N; i += 2) {
+      const p = S[i].point;
+      if ((p.x - x) ** 2 + (p.z - z) ** 2 < minD * minD) return false;
+    }
+    return true;
+  };
+  let placed = 0;
+  for (const side of [-1, 1]) {
+    let i = 0;
+    while (i < N && placed < max) {
+      const w = 7 + r() * 7;
+      const d = 9 + r() * 6;
+      const span = Math.max(2, Math.round(w / step));
+      const mid = (i + Math.floor(span / 2)) % N;
+      const s = S[mid];
+      const gap = r() < 0.16 ? 6 + r() * 5 : r() * 0.8; // the odd side street
+      const next = i + span + Math.max(1, Math.round(gap / step));
+      const ok = (() => {
+        for (let k = i; k <= i + span; k++) if (S[k % N].point.y > 0.8) return false;
+        const off = FRONT + d / 2;
+        const cx = s.point.x + s.right.x * side * off;
+        const cz = s.point.z + s.right.z * side * off;
+        if (pointInPolygon(poly, cx, cz)) return false; // keep the infield parks open
+        // every corner must stay behind the building line of every part of the circuit
+        const tx = s.tangent.x;
+        const tz = s.tangent.z;
+        const rx = s.right.x * side;
+        const rz = s.right.z * side;
+        for (const [ua, ra] of [[-w / 2, FRONT], [w / 2, FRONT], [-w / 2, FRONT + d], [w / 2, FRONT + d]]) {
+          const x = s.point.x + tx * ua + rx * ra;
+          const z = s.point.z + tz * ua + rz * ra;
+          if (!clearOf(x, z, FRONT - 0.6)) return false;
+          if (pointInPolygon(poly, x, z)) return false;
+        }
+        if (blocked(avoid, cx, cz, Math.max(w, d) * 0.45)) return false;
+        return { cx, cz };
+      })();
+      if (ok) {
+        const h = hMin + Math.pow(r(), 1.4) * (hMax - hMin);
+        let styleIdx = pickWeighted(styles, r);
+        if (h > 26 && styleIdx >= 2 && styleIdx < 4) styleIdx = r() < 0.5 ? 0 : 1;
+        const style = STYLE_NAMES[styleIdx];
+        const rotY = Math.atan2(s.tangent.x, s.tangent.z);
+        // shops at street level
+        dummy.position.set(ok.cx, 0, ok.cz);
+        dummy.rotation.set(0, rotY, 0);
+        dummy.scale.set(d + 0.3, SHOP_H, w + 0.02);
+        dummy.updateMatrix();
+        shopMesh.setMatrixAt(shopMesh.count++, dummy.matrix);
+        // the floors above
+        const up = getUpper(style);
+        dummy.position.y = SHOP_H;
+        dummy.scale.set(d, h - SHOP_H, w);
+        dummy.updateMatrix();
+        up.setMatrixAt(up.count, dummy.matrix);
+        const paints = PAINTS[style];
+        col.setHex(paints[(r() * paints.length) | 0]);
+        up.setColorAt(up.count, col);
+        up.count++;
+        // cornice band over the shops
+        dummy.position.y = SHOP_H - 0.1;
+        dummy.scale.set(d + 0.6, 0.45, w + 0.05);
+        dummy.updateMatrix();
+        cornices.setMatrixAt(cornices.count++, dummy.matrix);
+        if (a.roofs === 'mansard' && style === 'stone') {
+          dummy.position.y = h;
+          dummy.scale.set(d, 3 + r() * 1.2, w);
+          dummy.updateMatrix();
+          mansards.setMatrixAt(mansards.count++, dummy.matrix);
+        }
+        footprints.push({ x: ok.cx, z: ok.cz, r: Math.max(w, d) * 0.55 });
+        placed++;
+      }
+      i = next;
+    }
+  }
+  for (const m of [shopMesh, cornices, mansards, ...Object.values(meshes)]) {
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    m.computeBoundingSphere();
+  }
+  return footprints;
 }
 
 /* ---------- Skyline ---------- */
@@ -1121,14 +1389,14 @@ function buildTrees(group, r, a, track, avoid) {
       const s = track.samples[(r() * N) | 0];
       if (s.point.y > 1.0) continue;
       const side = r() < 0.5 ? -1 : 1;
-      const off = 9.5 + v.radius * 0.8 + r() * 6;
+      const off = 11.4 + v.radius * 0.45 + r() * 4.5; // on the footpath, behind the barrier wall
       x = s.point.x + s.right.x * side * off;
       z = s.point.z + s.right.z * side * off;
     } else {
       x = (r() - 0.5) * 200;
       z = (r() - 0.5) * 140;
     }
-    const clear = 8.5 + v.radius * 0.75;
+    const clear = 11 + v.radius * 0.3;
     if (distToTrackSq(track, x, z) < clear * clear) continue;
     if (blocked(avoid, x, z, v.radius * 0.6)) continue;
     heroPlacements[vi].push({ x, z, s: 0.8 + r() * 0.45, rot: r() * Math.PI * 2 });

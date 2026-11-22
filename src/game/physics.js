@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ROAD_HALF_WIDTH } from './track.js';
+import { WALL_INNER } from './streetCircuit.js';
 import { DESK_HALF_W, DESK_HALF_D } from './deskWorld.js';
 
 export const TOTAL_LAPS = 3;
@@ -236,18 +237,37 @@ export class Racer {
     this.pos.x += this.vel.x * dt;
     this.pos.z += this.vel.z * dt;
 
-    // Elevated Bridge Guardrail Containment
+    // Barriers: guardrails on the elevated bridge, concrete walls at street level.
+    // Slide along them, one jolt per impact, a light scrape while in contact.
     const postProj = this.track.project(this.pos, proj.u);
-    if (postProj.frame.point.y > 1.15) {
-      const limit = ROAD_HALF_WIDTH - 0.4;
-      if (Math.abs(postProj.lateral) > limit) {
-        const clampedLat = Math.sign(postProj.lateral) * limit;
-        const corrected = postProj.frame.point.clone().addScaledVector(postProj.frame.right, clampedLat);
-        this.pos.x = corrected.x;
-        this.pos.z = corrected.z;
-        this.speed *= 0.88;
-        this.impactShake = Math.max(this.impactShake, 0.45);
-        if (this.isPlayer && sound && Math.abs(this.speed) > 12) sound.playBump(0.4);
+    const elevated = postProj.frame.point.y > 1.15;
+    const wallLimit = elevated ? ROAD_HALF_WIDTH - 0.4 : WALL_INNER - 1.05;
+    this.wallCooldown = Math.max(0, (this.wallCooldown || 0) - dt);
+    if (Math.abs(postProj.lateral) > wallLimit) {
+      const sideSign = Math.sign(postProj.lateral);
+      const r = postProj.frame.right;
+      const corrected = postProj.frame.point.clone().addScaledVector(r, sideSign * wallLimit);
+      this.pos.x = corrected.x;
+      this.pos.z = corrected.z;
+      const into = (this.vel.x * r.x + this.vel.z * r.z) * sideSign;
+      if (into > 0) {
+        this.vel.x -= r.x * into * sideSign;
+        this.vel.z -= r.z * into * sideSign;
+      }
+      // turn the nose back along the barrier
+      const t = postProj.frame.tangent;
+      const along = Math.sin(this.heading) * t.x + Math.cos(this.heading) * t.z >= 0 ? 1 : -1;
+      const wallHeading = Math.atan2(t.x * along, t.z * along);
+      let dh = wallHeading - this.heading;
+      dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+      this.heading += dh * Math.min(1, dt * 4);
+      const hard = into > 7 && this.wallCooldown <= 0;
+      this.speed *= hard ? 0.86 : 0.996;
+      if (hard) {
+        this.wallCooldown = 0.5;
+        this.impactShake = Math.max(this.impactShake, 0.5);
+        if (particles) particles.emitSparks(this.pos, 5);
+        if (this.isPlayer && sound) sound.playBump(0.5);
       }
     }
 

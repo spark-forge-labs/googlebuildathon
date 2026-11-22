@@ -258,7 +258,7 @@ function towerBridge(track, group, u0, u1) {
     const f = track.getFrameAt(u);
     const deckY = f.point.y;
     const g = anchorAt(f);
-    box(g, 26, deckY, 9, stoneM, 0, deckY / 2, 0); // river pier
+    box(g, 26, Math.max(0.5, deckY - 0.7), 6, stoneM, 0, Math.max(0.5, deckY - 0.7) / 2, 0); // river pier, kept under the deck
     const H = 26;
     const portal = gothicPortal(23, H, 16, 12.5, 8, stoneM);
     portal.position.y = deckY;
