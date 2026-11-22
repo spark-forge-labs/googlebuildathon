@@ -9,7 +9,7 @@ import { Q } from './quality.js';
  * (full 3D near the circuit, baked impostors in the distance), flyover piers,
  * grandstand and realistic water.
  */
-const BASE = import.meta.env.BASE_URL || '/';
+const BASE = (import.meta.env && import.meta.env.BASE_URL) || '/';
 
 // skyline: share of tall towers, height ranges, facade style weights [glass, office, residential, heritage]
 // trees: weights for [oak, ash, aspen, oakSmall, bush]

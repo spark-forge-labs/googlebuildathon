@@ -1,0 +1,57 @@
+{
+  "tracks": {
+    "hyderabad": {
+      "lapLength": 406.31
+    },
+    "bangalore": {
+      "lapLength": 408.02
+    },
+    "mumbai": {
+      "lapLength": 406.84
+    },
+    "kolkata": {
+      "lapLength": 403.39
+    },
+    "delhi": {
+      "lapLength": 408.36
+    },
+    "chennai": {
+      "lapLength": 407.11
+    },
+    "pondicherry": {
+      "lapLength": 406.79
+    },
+    "vijayawada": {
+      "lapLength": 406.35
+    },
+    "vizag": {
+      "lapLength": 406.58
+    },
+    "warangal": {
+      "lapLength": 406.59
+    },
+    "kochi": {
+      "lapLength": 405.63
+    },
+    "goa": {
+      "lapLength": 403.51
+    },
+    "pune": {
+      "lapLength": 410.87
+    },
+    "ahmedabad": {
+      "lapLength": 408.36
+    },
+    "srinagar": {
+      "lapLength": 404.03
+    }
+  },
+  "cars": [
+    "Deccan GT",
+    "Nizam Apex",
+    "Cyber Drift",
+    "Turbo Auto",
+    "Kaali-Peeli GT"
+  ],
+  "vmax": 85.67999999999999
+}

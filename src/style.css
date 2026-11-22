@@ -1048,3 +1048,165 @@ body,
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------- Settings ---------- */
+.settings-panel {
+  max-width: 560px;
+  text-align: left;
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+}
+.settings-panel .menu-badge {
+  display: table;
+  margin: 0 auto 6px;
+}
+.settings-section {
+  margin: 14px 0 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gold, #f7c948);
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.set-row small {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+.set-toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.set-toggle::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.set-toggle:checked {
+  background: #14b8a6;
+}
+.set-toggle:checked::after {
+  transform: translateX(18px);
+}
+.set-toggle:focus-visible,
+.seg button:focus-visible,
+.key-btn:focus-visible {
+  outline: 2px solid var(--gold, #f7c948);
+  outline-offset: 2px;
+}
+.seg {
+  display: flex;
+  flex: none;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+.seg button {
+  background: transparent;
+  color: inherit;
+  border: 0;
+  padding: 6px 11px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.seg button + button {
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+.seg button.on {
+  background: #14b8a6;
+  color: #04111a;
+}
+.keybinds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.keybind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  font-weight: 700;
+}
+.key-btn {
+  min-width: 84px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.3);
+  color: inherit;
+  font: 700 11px/1.2 ui-monospace, Menlo, monospace;
+  cursor: pointer;
+}
+.key-btn.listening {
+  border-color: var(--gold, #f7c948);
+  color: var(--gold, #f7c948);
+  animation: pulse-key 1s ease-in-out infinite;
+}
+@keyframes pulse-key {
+  50% { opacity: 0.55; }
+}
+.set-note {
+  font-size: 11px;
+  opacity: 0.65;
+  margin: 6px 2px 0;
+}
+@media (max-width: 560px) {
+  .keybinds {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Player-chosen HUD / menu size (Settings → Text & HUD size) */
+#hud,
+.overlay .menu-panel {
+  zoom: var(--ui-scale, 1);
+}
+
+/* Live tilt readout states (classes, so colour-blind mode can restyle them) */
+.tilt-readout.is-gas { color: #4ade80; }
+.tilt-readout.is-brake { color: #f87171; }
+
+/* Colour-blind friendly palette: blue = go, orange = stop */
+body.colorblind .pedal-fill { background: #3b82f6; }
+body.colorblind .pedal-fill.brake { background: #f97316; }
+body.colorblind .pedal-tag.gas,
+body.colorblind .tilt-readout.is-gas { color: #60a5fa; }
+body.colorblind .pedal-tag.brk,
+body.colorblind .tilt-readout.is-brake { color: #fb923c; }
+body.colorblind .set-toggle:checked,
+body.colorblind .seg button.on { background: #3b82f6; }

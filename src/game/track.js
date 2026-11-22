@@ -561,7 +561,7 @@ export class RaceTrack {
     this.group.add(sfMesh);
 
     // Painted white starting grid brackets behind Start/Finish line (P1..P6)
-    const gridLineMat = new THREE.MeshStandardMaterial({ color: 0xe8e8e2, roughness: 0.6, transparent: true, opacity: 0.9 });
+    const gridLineMat = new THREE.MeshStandardMaterial({ color: 0xd9d9d3, roughness: 0.6 });
     for (let slot = 0; slot < 6; slot++) {
       const row = Math.floor(slot / 2);
       const col = slot % 2 === 0 ? -1 : 1;

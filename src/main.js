@@ -2,6 +2,7 @@ import { GameEngine } from './game/engine.js';
 import { CITIES, getCityById } from './game/cities.js';
 import { CAR_CATALOG } from './game/cars.js';
 import { fetchTop10, renderLeaderboard, sanitizeName, leaderboardOnline } from './game/leaderboard.js';
+import { ACTIONS, keyLabel } from './game/settings.js';
 
 const ui = {
   startOverlay: document.getElementById('start-overlay'),
@@ -208,36 +209,114 @@ ui.btnMotionMenu.addEventListener('click', () => engine.toggleMotionSteering());
 ui.btnMotionHud.addEventListener('click', () => engine.toggleMotionSteering());
 document.getElementById('btn-recenter-wheel').addEventListener('click', () => engine.recenterMotionWheel());
 
+// ---------- Settings overlay ----------
+const settingsOverlay = document.getElementById('settings-overlay');
+let rebinding = null; // action id waiting for a key press
+
+function renderSettings() {
+  const st = engine.settings;
+  settingsOverlay.querySelectorAll('.set-toggle').forEach((el) => {
+    el.checked = !!st.get(el.dataset.setting);
+  });
+  settingsOverlay.querySelectorAll('.seg').forEach((seg) => {
+    const v = Number(st.get(seg.dataset.setting));
+    seg.querySelectorAll('button').forEach((b) => {
+      const on = Math.abs(Number(b.dataset.v) - v) < 1e-6;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+  });
+  const keys = st.get('keys');
+  document.getElementById('keybinds').innerHTML = ACTIONS.map(
+    (a) => `<div class="keybind"><span>${a.label}</span>
+      <button class="key-btn ${rebinding === a.id ? 'listening' : ''}" data-action="${a.id}">${
+        rebinding === a.id ? 'Press a key…' : (keys[a.id] || []).map(keyLabel).join(' / ') || '—'
+      }</button></div>`
+  ).join('');
+  document.querySelectorAll('#keybinds .key-btn').forEach((b) =>
+    b.addEventListener('click', () => {
+      rebinding = rebinding === b.dataset.action ? null : b.dataset.action;
+      renderSettings();
+    })
+  );
+  const pad = engine.gamepad;
+  document.getElementById('pad-status').textContent = pad.connected
+    ? `${pad.isWheel ? 'Racing wheel' : 'Controller'} connected: ${pad.name.slice(0, 48)}. ` +
+      (pad.isWheel
+        ? 'Wheel steers, pedals drive, button 1 drifts, button 2 nitro.'
+        : 'Left stick steers, RT/LT gas & brake, A drift, B nitro, Y camera, Back resets.')
+    : 'No controller found. Connect a gamepad or racing wheel and press any button.';
+}
+
+settingsOverlay.querySelectorAll('.set-toggle').forEach((el) =>
+  el.addEventListener('change', () => engine.settings.set(el.dataset.setting, el.checked))
+);
+settingsOverlay.querySelectorAll('.seg button').forEach((b) =>
+  b.addEventListener('click', () => {
+    engine.settings.set(b.parentElement.dataset.setting, Number(b.dataset.v));
+    renderSettings();
+  })
+);
+document.getElementById('btn-settings').addEventListener('click', () => {
+  rebinding = null;
+  renderSettings();
+  settingsOverlay.classList.remove('hidden');
+});
+const closeSettings = () => {
+  rebinding = null;
+  settingsOverlay.classList.add('hidden');
+};
+document.getElementById('settings-close').addEventListener('click', closeSettings);
+document.getElementById('settings-reset-keys').addEventListener('click', () => {
+  engine.settings.resetKeys();
+  rebinding = null;
+  renderSettings();
+});
+window.addEventListener('gamepadconnected', () => !settingsOverlay.classList.contains('hidden') && renderSettings());
+window.addEventListener('gamepaddisconnected', () => !settingsOverlay.classList.contains('hidden') && renderSettings());
+
+// Capture the next key while rebinding (runs before the game's key handler)
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (settingsOverlay.classList.contains('hidden')) return;
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (rebinding) {
+        rebinding = null;
+        renderSettings();
+      } else closeSettings();
+      return;
+    }
+    if (!rebinding) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const note = document.getElementById('keybind-note');
+    if (engine.settings.bindKey(rebinding, e.code)) {
+      note.textContent = `${ACTIONS.find((a) => a.id === rebinding).label} → ${keyLabel(e.code)}`;
+      rebinding = null;
+    } else {
+      note.textContent = `${keyLabel(e.code)} is reserved. Pick another key.`;
+    }
+    renderSettings();
+  },
+  true
+);
+
+// Gamepad buttons that mirror the on-screen ones
+engine.gamepad.onPress = (action) => {
+  if (!settingsOverlay.classList.contains('hidden')) return;
+  if (action === 'camera') engine.cycleCamera();
+  if (action === 'reset' && engine.state === 'RACING') engine.resetPlayerCar();
+  if (action === 'start' && (engine.state === 'MENU' || engine.state === 'FINISHED')) startRaceFromTap();
+};
+
 // Keyboard controls
 function setKey(code, pressed) {
-  switch (code) {
-    case 'ArrowUp':
-    case 'KeyW':
-      engine.input.up = pressed;
-      break;
-    case 'ArrowDown':
-    case 'KeyS':
-      engine.input.down = pressed;
-      break;
-    case 'ArrowLeft':
-    case 'KeyA':
-      engine.input.left = pressed;
-      break;
-    case 'ArrowRight':
-    case 'KeyD':
-      engine.input.right = pressed;
-      break;
-    case 'Space':
-      engine.input.drift = pressed;
-      break;
-    case 'ShiftLeft':
-    case 'ShiftRight':
-    case 'KeyN':
-      engine.input.boost = pressed;
-      break;
-    default:
-      break;
-  }
+  // Rebindable driving keys (Settings → Controls)
+  const action = engine.settings.actionForKey(code);
+  if (action) engine.input[action] = pressed;
 }
 
 window.addEventListener('keydown', (e) => {
@@ -246,7 +325,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Enter' && engine.state === 'MENU') startRaceFromTap();
     return;
   }
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code) || engine.settings.actionForKey(e.code)) {
     e.preventDefault();
   }
   setKey(e.code, true);
@@ -292,3 +371,10 @@ bindTouch('touch-brake-btn', 'down');
 bindTouch('touch-gas-btn', 'up');
 bindTouch('touch-drift-btn', 'drift');
 bindTouch('touch-boost-btn', 'boost');
+
+// Installable app + offline play for cities you've already raced (production builds only)
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {});
+  });
+}

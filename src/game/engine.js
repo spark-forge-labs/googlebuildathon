@@ -10,7 +10,14 @@ import { MotionSteeringController } from './motionControls.js';
 import { buildRealSky, loadHdriEnvironment, loadTreeLibrary, ensureTreeVariants } from './realWorld.js';
 import { preloadCarModel } from './carModels.js';
 import { Q } from './quality.js';
-import { submitScore, fetchTop10, renderLeaderboard, formatMs, sanitizeName, leaderboardOnline } from './leaderboard.js';
+import { submitScore, fetchTop10, fetchGhost, renderLeaderboard, formatMs, sanitizeName, leaderboardOnline } from './leaderboard.js';
+import { RaceTelemetry } from './telemetry.js';
+import { GhostCar } from './ghost.js';
+import { Settings } from './settings.js';
+import { GamepadInput } from './gamepad.js';
+import { mergeStaticMeshes } from './staticMerge.js';
+
+const PHYS_STEP = 1 / 120; // fixed physics timestep (deterministic timing for telemetry/anti-cheat)
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
@@ -130,6 +137,22 @@ export class GameEngine {
     this.clock = new THREE.Clock();
     this.elapsed = 0;
 
+    this.settings = new Settings();
+    this.applySettings();
+    this.settings.onChange(() => this.applySettings());
+    this.gamepad = new GamepadInput();
+    // Every bump / nitro the player hears is also felt
+    const bump = this.sound.playBump.bind(this.sound);
+    const boost = this.sound.playBoost.bind(this.sound);
+    this.sound.playBump = (i = 0.6) => {
+      bump(i);
+      this.haptic(i, 45);
+    };
+    this.sound.playBoost = () => {
+      boost();
+      this.haptic(0.9, 90);
+    };
+
     this.input = {
       up: false,
       down: false,
@@ -140,6 +163,8 @@ export class GameEngine {
       analogSteer: 0,
       analogThrottle: 0,
       analogBrake: 0,
+      autoAccelerate: false,
+      steerAssist: 0,
     };
 
     // Load initial city (Hyderabad) live on top of the desk!
@@ -147,6 +172,8 @@ export class GameEngine {
     this.setupPostProcessing();
     this.loadHdAssets();
 
+    this.drsScale = 1;
+    this._drsOff = new URLSearchParams(location.search).get('drs') === '0';
     window.addEventListener('resize', () => this.onResize());
     this.loop();
   }
@@ -230,6 +257,7 @@ export class GameEngine {
     this.currentCity = city;
 
     // Cleanly tear down previous city track & world
+    this.clearGhost();
     if (this.track) {
       this.scene.remove(this.track.group);
       this.track = null;
@@ -271,6 +299,8 @@ export class GameEngine {
     // Build city's track & desk diorama with all iconic towers and bridges
     this.track = new RaceTrack(city);
     this.scene.add(this.track.group);
+    // Studs, apex blocks, rails etc. → a handful of draw calls (boost pads pulse, so they stay separate)
+    this.track.mergeStats = mergeStaticMeshes(this.track.group, new Set(this.track.boostPadMeshes.map((p) => p.mesh)));
 
     this.deskWorld = new DeskWorld(this.scene, this.track, city);
 
@@ -326,6 +356,26 @@ export class GameEngine {
     });
   }
 
+  /** Accessibility / UI settings that live on the page. */
+  /** Haptic pulse for bumps and nitro: pad rumble, or the phone's vibration motor (Android). */
+  haptic(strength = 0.5, ms = 60) {
+    if (!this.settings.get('haptics')) return;
+    if (this.gamepad.connected && this.gamepad.rumble(strength, ms * 2)) return;
+    if (this.motion.enabled && typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        navigator.vibrate(Math.round(ms * (0.5 + strength)));
+      } catch (e) {
+        /* not allowed */
+      }
+    }
+  }
+
+  applySettings() {
+    const st = this.settings;
+    document.body.classList.toggle('colorblind', !!st.get('colorblind'));
+    document.documentElement.style.setProperty('--ui-scale', String(st.get('uiScale') || 1));
+  }
+
   setPlayerName(name) {
     this.playerName = sanitizeName(name);
     try {
@@ -361,13 +411,15 @@ export class GameEngine {
       bestLapMs: Number.isFinite(p.bestLapTime) ? p.bestLapTime * 1000 : null,
       car: spec.name,
       position: rank,
+      telemetry: this.telemetry,
     });
     const { rows, source } = await fetchTop10(city.id);
     if (raceId !== this.raceCounter) return; // a new race started meanwhile
     const inTop = renderLeaderboard(ui.finishLbList, rows, { name, totalMs });
     const mine = inTop ? 'You made the top 10!' : `Your time ${formatMs(totalMs)} is not in the top 10 yet.`;
     let where2;
-    if (source === 'online' && where === 'online') where2 = 'Saved to the BeyondGravity leaderboard.';
+    if (where === 'online') where2 = 'Verified and saved to the BeyondGravity leaderboard.';
+    else if (typeof where === 'object' && where.rejected) where2 = `Run not accepted by the server: ${where.reason}.`;
     else if (leaderboardOnline) where2 = 'Could not reach BeyondGravity: saved on this device.';
     else where2 = 'Saved on this device.';
     ui.finishLbStatus.textContent = `${mine} ${where2}`;
@@ -422,7 +474,29 @@ export class GameEngine {
     }
   }
 
+  /** Ghost of the city's fastest run (BeyondGravity) or, offline, your own best on this device. */
+  async loadGhost(cityId) {
+    this.clearGhost();
+    if (!this.settings.get('ghost')) return;
+    const token = (this.ghostToken = (this.ghostToken || 0) + 1);
+    const g = await fetchGhost(cityId);
+    if (!g || token !== this.ghostToken || this.currentCity.id !== cityId || this.state === 'MENU') return;
+    const spec = CAR_CATALOG.find((c) => c.name === g.car) || CAR_CATALOG[0];
+    const rig = buildVehicleMesh({ bodyColor: 0x9fd8ff, accentColor: spec.accentColor, type: spec.type, isPlayer: false, lite: true });
+    this.ghost = new GhostCar(this.scene, rig, g.samples, g.player_name);
+    this.ghostInfo = g;
+  }
+
+  clearGhost() {
+    if (this.ghost) this.ghost.dispose();
+    this.ghost = null;
+    this.ghostInfo = null;
+  }
+
   startRace() {
+    this.telemetry = new RaceTelemetry();
+    this.physAcc = 0;
+    this.loadGhost(this.currentCity.id);
     this.sound.init();
     this.particles.clearSkids();
     this.spawnRacers();
@@ -447,6 +521,7 @@ export class GameEngine {
 
   backToMenu() {
     this.state = 'MENU';
+    this.clearGhost();
     this.sound.setMusicIntensity('menu');
     if (this.pendingHdRebuild) {
       this.pendingHdRebuild = false;
@@ -537,8 +612,7 @@ export class GameEngine {
   onResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    if (this.composer) this.composer.setSize(window.innerWidth, window.innerHeight);
+    this.setRenderScale(this.drsScale || 1);
   }
 
   updateCountdown(dt) {
@@ -681,7 +755,8 @@ export class GameEngine {
 
     // Visceral speed vibration & collision camera shake
     const speedVibration = this.state === 'RACING' && p.isBoosting ? 0.14 : Math.max(0, (Math.abs(p.speed) - 42) * 0.0025);
-    const totalShake = (speedVibration + p.impactShake * 0.45) * (mode === 'DESK TOP' ? 0.3 : 1.0);
+    const shakeScale = this.settings.get('reducedShake') ? 0.12 : 1.0;
+    const totalShake = (speedVibration + p.impactShake * 0.45) * (mode === 'DESK TOP' ? 0.3 : 1.0) * shakeScale;
     const shakeX = (Math.random() - 0.5) * totalShake;
     const shakeY = (Math.random() - 0.5) * totalShake;
 
@@ -734,7 +809,8 @@ export class GameEngine {
           d.samples === 0
             ? 'NO SENSOR DATA'
             : `TILT ${d.pitch >= 0 ? '+' : ''}${d.pitch.toFixed(0)}° ${d.pitch > 3 ? 'GAS' : d.pitch < -3 ? 'BRAKE' : 'COAST'}`;
-        this.ui.tiltReadout.style.color = d.samples === 0 ? '#f87171' : d.pitch > 3 ? '#4ade80' : d.pitch < -3 ? '#f87171' : '';
+        this.ui.tiltReadout.classList.toggle('is-gas', d.samples > 0 && d.pitch > 3);
+        this.ui.tiltReadout.classList.toggle('is-brake', d.samples === 0 || d.pitch < -3);
       }
     }
 
@@ -794,7 +870,47 @@ export class GameEngine {
   loop() {
     requestAnimationFrame(() => this.loop());
     if (this.paused) return; // debug: frames are stepped manually via tick()
+    this.updateDynamicResolution();
+    const t0 = performance.now();
     this.tick();
+    // CPU-side frame cost: rAF is vsync-capped, so this is how we know there's headroom to climb
+    const work = performance.now() - t0;
+    this._drsWork = this._drsWork === undefined ? work : this._drsWork * 0.92 + work * 0.08;
+  }
+
+  /**
+   * Dynamic resolution: keeps ~60 fps by trading pixels for frame time. Slow frames for ~1 s drop the
+   * render scale (min 60 % of the tier's pixel ratio); consistently fast frames raise it back.
+   */
+  updateDynamicResolution() {
+    const now = performance.now();
+    const last = this._drsLast;
+    this._drsLast = now;
+    if (last === undefined || this._drsOff) return;
+    const ms = now - last;
+    if (ms > 1000) return; // tab was hidden / debugger pause — not a real frame
+    this._drsEma = this._drsEma === undefined ? ms : this._drsEma * 0.92 + ms * 0.08;
+    this._drsCooldown = (this._drsCooldown || 0) - ms;
+    if (this._drsCooldown > 0) return;
+    const scale = this.drsScale || 1;
+    let next = scale;
+    if (this._drsEma > 20.5) next = Math.max(0.6, scale - 0.1);
+    else if (scale < 1 && this._drsEma < 18 && (this._drsWork ?? 99) < 9) next = Math.min(1, scale + 0.05);
+    if (next !== scale) {
+      this.setRenderScale(next);
+      this._drsCooldown = next < scale ? 900 : 2500; // quick to drop, slow to climb
+    }
+  }
+
+  setRenderScale(scale) {
+    this.drsScale = scale;
+    const pr = Q.pixelRatio * scale;
+    this.renderer.setPixelRatio(pr);
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    if (this.composer) {
+      this.composer.setPixelRatio(pr);
+      this.composer.setSize(window.innerWidth, window.innerHeight);
+    }
   }
 
   tick(fixedDt = null, render = true) {
@@ -802,12 +918,23 @@ export class GameEngine {
     this.elapsed += dt;
 
     // Feed live motion sensor steering angle into physics input
+    this.input.autoAccelerate = !!this.settings.get('autoAccelerate');
+    this.input.steerAssist = this.settings.get('steerAssist') || 0;
     const motionOn = this.motion.enabled;
     this.input.analogSteer = motionOn ? this.motion.steerValue : 0;
     // Hold the car on the grid during the countdown so recentering doesn't launch it
     const pedalLive = motionOn && this.state === 'RACING';
     this.input.analogThrottle = pedalLive ? this.motion.throttleValue : 0;
     this.input.analogBrake = pedalLive ? this.motion.brakeValue : 0;
+    // Gamepad / wheel takes over the analog channels while it's in use
+    const pad = this.gamepad.poll();
+    this.input.padDrift = pad.drift;
+    this.input.padBoost = pad.boost;
+    if (pad.active) {
+      this.input.analogSteer = pad.steer;
+      this.input.analogThrottle = this.state === 'RACING' ? pad.throttle : 0;
+      this.input.analogBrake = this.state === 'RACING' ? pad.brake : 0;
+    }
 
     this.steamTimer -= dt;
     if (this.steamTimer <= 0 && this.deskWorld && this.deskWorld.mugSteamOrigin) {
@@ -822,18 +949,26 @@ export class GameEngine {
       this.updateCountdown(dt);
       this.sound.updateEngine(0.2, false, false, true);
     } else if (this.state === 'RACING' || this.state === 'FINISHED') {
-      if (this.state === 'RACING') this.raceTime += dt;
+      // Fixed 120 Hz physics steps, independent of the display frame rate
+      this.physAcc = Math.min((this.physAcc || 0) + dt, 0.25);
+      let steps = 0;
+      while (this.physAcc >= PHYS_STEP && steps < 40) {
+        this.physAcc -= PHYS_STEP;
+        steps++;
+        if (this.state === 'RACING') this.raceTime += PHYS_STEP;
+        const leaderProgress = Math.max(...this.racers.map((r) => r.totalProgress));
+        for (const r of this.racers) {
+          r.update(PHYS_STEP, this.input, this.raceTime, this.deskWorld, this.particles, this.sound, leaderProgress);
+        }
+        resolveCarCollisions(this.racers, this.particles, this.sound);
+        if (this.telemetry && this.state === 'RACING') this.telemetry.step(this.raceTime, this.player);
 
-      const leaderProgress = Math.max(...this.racers.map((r) => r.totalProgress));
-      for (const r of this.racers) {
-        r.update(dt, this.input, this.raceTime, this.deskWorld, this.particles, this.sound, leaderProgress);
+        if (this.state === 'RACING' && this.player.finished) {
+          this.state = 'FINISHED';
+          this.showFinishModal();
+        }
       }
-      resolveCarCollisions(this.racers, this.particles, this.sound);
-
-      if (this.state === 'RACING' && this.player.finished) {
-        this.state = 'FINISHED';
-        this.showFinishModal();
-      }
+      if (this.ghost) this.ghost.update(this.raceTime);
 
       const speedRatio = Math.abs(this.player.speed) / this.player.maxSpeed;
       this.sound.updateEngine(speedRatio, this.player.isDrifting, this.player.isBoosting, this.state === 'RACING');

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { paletteMerge } from './staticMerge.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
@@ -9,7 +10,7 @@ import { Q } from './quality.js';
  * shipped with the three.js examples. Loaded once, cloned per racer with its
  * own paint, brake lights and wheel pivots that plug into the existing rig.
  */
-const BASE = import.meta.env.BASE_URL || '/';
+const BASE = (import.meta.env && import.meta.env.BASE_URL) || '/';
 const TARGET_LENGTH = 4.9; // game units (procedural cars are ~5)
 
 let template = null; // full detail
@@ -26,7 +27,32 @@ const INTERIOR = new Set([
   'carpet',
   'trim',
   'steering_wheel',
+  'interior', // merged interior batch
 ]);
+
+/**
+ * Bakes the car's ~40 part meshes into ~8 draw calls: one palette batch per wheel (they spin and
+ * steer), one for the static trim, one for the interior, plus paint, glass and tail lights.
+ */
+function batchCar(model) {
+  const meshesOf = (obj, pred) => {
+    const out = [];
+    obj.traverse((o) => o.isMesh && pred(o) && out.push(o));
+    return out;
+  };
+  const wheels = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'].map((n) => model.getObjectByName(n)).filter(Boolean);
+  for (const w of wheels) paletteMerge(w, meshesOf(w, () => true), 'wheel-batch');
+  const inWheel = (o) => wheels.some((w) => { for (let p = o; p; p = p.parent) if (p === w) return true; return false; });
+  const special = new Set(['body', 'brakes', 'lights_red', 'glass']);
+  const interior = meshesOf(model, (o) => !inWheel(o) && INTERIOR.has(o.name) ||
+    (o.parent && o.parent.name === 'steering_wheel'));
+  paletteMerge(model, interior, 'interior');
+  const trim = meshesOf(model, (o) => !inWheel(o) && !special.has(o.name) && !interior.includes(o) && !INTERIOR.has(o.name));
+  paletteMerge(model, trim, 'trim-batch');
+  // Brake + tail lights share one material per car (it glows when braking) → one mesh
+  paletteMerge(model, meshesOf(model, (o) => o.name === 'brakes' || o.name === 'lights_red'), 'brakes');
+  return model;
+}
 
 /** Returns a copy of the model with every heavy mesh simplified to `ratio` of its triangles. */
 function simplifiedCopy(model, ratio) {
@@ -134,11 +160,14 @@ export function preloadCarModel() {
         // Lighter copies for rival cars and phones (meshoptimizer simplification)
         MeshoptSimplifier.ready
           .then(() => {
-            templateMid = simplifiedCopy(model, 0.45);
-            templateLow = simplifiedCopy(model, 0.2);
+            templateMid = batchCar(simplifiedCopy(model, 0.45));
+            templateLow = batchCar(simplifiedCopy(model, 0.2));
           })
           .catch((e) => console.warn('Car simplification unavailable, using full detail', e))
-          .finally(() => resolve(template));
+          .finally(() => {
+            batchCar(template);
+            resolve(template);
+          });
       },
       undefined,
       (err) => {
