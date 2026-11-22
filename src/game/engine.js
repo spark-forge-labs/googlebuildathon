@@ -121,9 +121,16 @@ export class GameEngine {
     } catch (e) {
       /* storage unavailable */
     }
-    this.selectedCityId = CITIES[0].id;
+    // Deep link: ?city=<id> (used by MandirGlobe's Grand Prix selector) opens that circuit
+    const params = new URLSearchParams(location.search);
+    const linked = CITIES.find((c) => c.id === (params.get('city') || '').toLowerCase());
+    this.selectedCityId = (linked || CITIES[0]).id;
     this.selectedCarId = CAR_CATALOG[0].id;
-    this.currentCity = CITIES[0];
+    this.currentCity = linked || CITIES[0];
+    // Cinematic arrival: fall from high above the city onto the circuit
+    const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.introDuration = (linked || params.get('intro') === 'zoom') && !calm ? 4.2 : 0;
+    this.introT = 0;
     this.track = null;
     this.deskWorld = null;
 
@@ -255,6 +262,7 @@ export class GameEngine {
     const city = getCityById(cityId);
     this.selectedCityId = city.id;
     this.currentCity = city;
+    this.sound.setMusicStyle(city.id); // every circuit has its own local soundtrack
 
     // Cleanly tear down previous city track & world
     this.clearGhost();
@@ -696,6 +704,18 @@ export class GameEngine {
         Math.cos(angle) * radius * 0.82
       );
       this.camera.lookAt(0, 5, -2);
+      if (this.introT < this.introDuration) {
+        // Zoom-in arrival: start almost straight overhead, high above the city, and swoop down
+        this.introT += dt;
+        const k = Math.min(1, this.introT / this.introDuration);
+        const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+        const orbit = this.camera.position.clone();
+        const high = new THREE.Vector3(orbit.x * 0.08, 760, orbit.z * 0.08 + 30);
+        this.camera.position.lerpVectors(high, orbit, e);
+        this.camera.lookAt(0, 5 * e, -2 * e);
+        this.camera.rotateZ((1 - e) * 0.9); // a little spiral as it falls
+        document.body.classList.toggle('intro-playing', k < 0.82);
+      }
       this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, 54, Math.min(1, dt * 4));
       this.camera.updateProjectionMatrix();
       return;

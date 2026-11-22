@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { Q } from './quality.js';
+import { WORLD_ATMOS } from './worldCities.js';
 
 /**
  * Real-world look for every city: physical sky + sun, real HDRI reflections,
@@ -46,7 +48,10 @@ export const REAL_ATMOS = {
                  skyline: { tall: 0.0,  maxH: 22,  styles: [0.0, 0.05, 0.45, 0.5] }, trees: [3, 2, 1, 3, 1], mountains: true, autumn: true },
 };
 
+Object.assign(REAL_ATMOS, WORLD_ATMOS);
+
 const GROUND_PALETTE = {
+  temperate: ['#4f7d3a', '#5c8a40', '#47703a', '#6a8a48'],
   deccan: ['#7d6a45', '#6b7a3c', '#8a6b4a', '#5f6e37'],
   garden: ['#4f7a35', '#3f6b2c', '#5c8a3d', '#6a7d3e'],
   urban: ['#6d6a5e', '#5a6b45', '#7a7466', '#56603f'],
@@ -311,6 +316,99 @@ function buildFacades() {
         g.fillStyle = 'rgba(0,0,0,0.12)';
         g.fillRect(0, f * fh + fh - 3, W, 3);
       }
+    } else if (style === 'brick') {
+      // London / New York brick: stretcher-bond brick, white sash windows, stone lintels and sills
+      g.fillStyle = '#8a4a36';
+      g.fillRect(0, 0, W, H);
+      rg.fillStyle = 'rgb(235,235,235)';
+      rg.fillRect(0, 0, W, H);
+      const bh = 6;
+      for (let y = 0, row = 0; y < H; y += bh, row++) {
+        for (let x = -((row % 2) * 8); x < W; x += 16) {
+          const v = r() * 26 - 13;
+          g.fillStyle = `rgb(${138 + v},${74 + v * 0.6},${54 + v * 0.4})`;
+          g.fillRect(x + 1, y + 1, 14, bh - 1);
+        }
+      }
+      for (let f = 0; f < floors; f++) {
+        for (let b = 0; b < bays; b++) {
+          const x = b * bw + bw * 0.24;
+          const y = f * fh + fh * 0.2;
+          const w = bw * 0.52;
+          const h = fh * 0.56;
+          g.fillStyle = '#d9d4c7'; // stone lintel + sill
+          g.fillRect(x - 3, y - 5, w + 6, 5);
+          g.fillRect(x - 2, y + h, w + 4, 4);
+          g.fillStyle = '#f2f0ea'; // white frame
+          g.fillRect(x, y, w, h);
+          g.fillStyle = r() > 0.75 ? '#c9b98f' : '#2b3138';
+          g.fillRect(x + 3, y + 3, w - 6, h / 2 - 4);
+          g.fillStyle = r() > 0.8 ? '#c9b98f' : '#262b31';
+          g.fillRect(x + 3, y + h / 2 + 1, w - 6, h / 2 - 4);
+          rg.fillStyle = 'rgb(40,40,40)';
+          rg.fillRect(x + 3, y + 3, w - 6, h - 6);
+          g.fillStyle = '#f2f0ea';
+          g.fillRect(x + w / 2 - 1, y, 2, h); // glazing bar
+        }
+      }
+    } else if (style === 'stone') {
+      // Haussmann limestone: rusticated base lines, tall French windows, wrought-iron balconies
+      g.fillStyle = '#e4d9c2';
+      g.fillRect(0, 0, W, H);
+      rg.fillStyle = 'rgb(225,225,225)';
+      rg.fillRect(0, 0, W, H);
+      for (let i = 0; i < 260; i++) {
+        g.fillStyle = `rgba(90,80,60,${r() * 0.05})`;
+        g.fillRect(r() * W, r() * H, 3 + r() * 30, 2 + r() * 10);
+      }
+      for (let y = 0; y < H; y += 10) {
+        g.fillStyle = 'rgba(120,105,80,0.18)';
+        g.fillRect(0, y, W, 1);
+      }
+      for (let f = 0; f < floors; f++) {
+        const balconyFloor = f === 1;
+        for (let b = 0; b < bays; b++) {
+          const x = b * bw + bw * 0.27;
+          const y = f * fh + fh * 0.14;
+          const w = bw * 0.46;
+          const h = fh * 0.66;
+          g.fillStyle = '#d3c6aa'; // carved surround
+          g.fillRect(x - 3, y - 3, w + 6, h + 4);
+          if (f === 2) {
+            g.beginPath(); // small pediment
+            g.moveTo(x - 5, y - 3);
+            g.lineTo(x + w / 2, y - 11);
+            g.lineTo(x + w + 5, y - 3);
+            g.closePath();
+            g.fill();
+          }
+          g.fillStyle = '#2f343a';
+          g.fillRect(x, y, w, h);
+          rg.fillStyle = 'rgb(35,35,35)';
+          rg.fillRect(x, y, w, h);
+          g.fillStyle = 'rgba(210,215,220,0.18)';
+          g.fillRect(x + 2, y + 2, w / 2 - 3, h - 4);
+          g.fillStyle = '#efe7d6';
+          g.fillRect(x + w / 2 - 1, y, 2, h);
+          if (!balconyFloor) {
+            // individual Juliet balcony rail
+            g.fillStyle = '#1d1f22';
+            g.fillRect(x - 2, y + h * 0.62, w + 4, 2);
+            for (let k = 0; k <= 6; k++) g.fillRect(x - 2 + (k * (w + 4)) / 6, y + h * 0.62, 1, h * 0.38);
+          }
+        }
+        if (balconyFloor) {
+          // continuous wrought-iron balcony along the whole floor
+          const y = f * fh + fh * 0.62;
+          g.fillStyle = '#cfc2a6';
+          g.fillRect(0, y + fh * 0.18, W, 5);
+          g.fillStyle = '#1d1f22';
+          g.fillRect(0, y - 2, W, 2);
+          for (let x = 0; x < W; x += 5) g.fillRect(x, y - 2, 1, fh * 0.2);
+        }
+        g.fillStyle = '#d6c9ad';
+        g.fillRect(0, f * fh + fh - 5, W, 5); // string course
+      }
     } else {
       // Heritage / colonial: lime-washed walls, tall arched shuttered windows, cornices
       g.fillStyle = '#efe6cf';
@@ -353,7 +451,7 @@ function buildFacades() {
     return { map, rough };
   };
 
-  for (const s of ['glass', 'office', 'residential', 'heritage']) out[s] = mk(s);
+  for (const s of ['glass', 'office', 'residential', 'heritage', 'brick', 'stone']) out[s] = mk(s);
   return out;
 }
 
@@ -740,8 +838,10 @@ function buildFlyoverPiers(group, track) {
 }
 
 /* ---------- Skyline ---------- */
-const STYLE_NAMES = ['glass', 'office', 'residential', 'heritage'];
+const STYLE_NAMES = ['glass', 'office', 'residential', 'heritage', 'brick', 'stone'];
 const PAINTS = {
+  brick: [0xffffff, 0xe8d6cc, 0xd9c2b8, 0xc9b1a6, 0xf0e2d4],
+  stone: [0xffffff, 0xf6efe2, 0xefe6d2, 0xfaf4e8],
   glass: [0xffffff, 0xdfe9f0, 0xcfe0dc, 0xe8e2d6],
   office: [0xffffff, 0xeae2d2, 0xd8d8d8, 0xe6d8c4],
   residential: [0xffffff, 0xf3e3b8, 0xe9c9b3, 0xd9e4cf, 0xf1d1a0, 0xd8d0e6, 0xbfd8dc],
@@ -794,11 +894,40 @@ function buildSkyline(group, r, a) {
     return m;
   };
 
-  const tankGeo = new THREE.CylinderGeometry(0.9, 0.9, 1.8, 12);
-  tankGeo.translate(0, 0.9, 0);
-  const tankMat = new THREE.MeshStandardMaterial({ color: 0x1b1c1e, roughness: 0.55 }); // black rooftop water tanks
-  const tanks = new THREE.InstancedMesh(tankGeo, tankMat, Q.buildings * 2);
+  const roofs = a.roofs || 'indian';
+  let tanks;
+  if (roofs === 'water-tower') {
+    // New York timber water towers on steel stilts with conical caps
+    const barrel = new THREE.CylinderGeometry(1.1, 1.1, 2.2, 12);
+    barrel.translate(0, 2.6, 0);
+    const cap = new THREE.ConeGeometry(1.25, 1.1, 12);
+    cap.translate(0, 4.25, 0);
+    const stilts = new THREE.CylinderGeometry(0.75, 0.9, 1.5, 4);
+    stilts.translate(0, 0.75, 0);
+    const towerGeo = mergeGeometries([barrel, cap, stilts], true);
+    const mats = [
+      new THREE.MeshStandardMaterial({ color: 0x6b4c34, roughness: 0.9 }),
+      new THREE.MeshStandardMaterial({ color: 0x3a3532, roughness: 0.7, metalness: 0.3 }),
+      new THREE.MeshStandardMaterial({ color: 0x2c2f33, roughness: 0.6, metalness: 0.5 }),
+    ];
+    tanks = new THREE.InstancedMesh(towerGeo, mats, Q.buildings * 2);
+  } else {
+    const tankGeo = new THREE.CylinderGeometry(0.9, 0.9, 1.8, 12);
+    tankGeo.translate(0, 0.9, 0);
+    const tankMat = new THREE.MeshStandardMaterial({ color: 0x1b1c1e, roughness: 0.55 }); // black rooftop water tanks
+    tanks = new THREE.InstancedMesh(tankGeo, tankMat, Q.buildings * 2);
+  }
   tanks.count = 0;
+  // Paris: zinc mansard roof on every stone block
+  const mansardGeo = new THREE.CylinderGeometry(0.5, 0.707, 1, 4, 1);
+  mansardGeo.rotateY(Math.PI / 4);
+  mansardGeo.translate(0, 0.5, 0);
+  const mansards = new THREE.InstancedMesh(
+    mansardGeo,
+    new THREE.MeshStandardMaterial({ color: 0x5d6672, roughness: 0.45, metalness: 0.45, flatShading: true }),
+    roofs === 'mansard' ? Q.buildings : 1
+  );
+  mansards.count = 0;
   const parapetGeo = new THREE.BoxGeometry(1, 1, 1);
   parapetGeo.translate(0, 0.5, 0);
   const acMat = new THREE.MeshStandardMaterial({ color: 0xbdbdb8, roughness: 0.6, metalness: 0.4 });
@@ -844,8 +973,18 @@ function buildSkyline(group, r, a) {
     mesh.count++;
     placed++;
 
-    // Rooftop clutter: black water tanks on residential, AC units on offices
-    const roofItems = style === 'residential' || style === 'heritage' ? 1 + ((r() * 2) | 0) : r() < 0.5 ? 1 : 0;
+    if (roofs === 'mansard' && style === 'stone' && mansards.count < mansards.instanceMatrix.count) {
+      dummy.position.set(x, h, z);
+      dummy.rotation.set(0, rotY, 0);
+      dummy.scale.set(w, 3 + r() * 1.5, d);
+      dummy.updateMatrix();
+      mansards.setMatrixAt(mansards.count++, dummy.matrix);
+      continue;
+    }
+
+    // Rooftop clutter: water tanks on homes (black PVC in India, timber towers in New York), AC plant on offices
+    const tankStyle = roofs === 'water-tower' ? style === 'brick' || style === 'heritage' : roofs === 'indian' && (style === 'residential' || style === 'heritage');
+    const roofItems = tankStyle ? (roofs === 'water-tower' ? (r() < 0.6 ? 1 : 0) : 1 + ((r() * 2) | 0)) : r() < 0.5 ? 1 : 0;
     for (let k = 0; k < roofItems; k++) {
       const ox = (r() - 0.5) * w * 0.6;
       const oz = (r() - 0.5) * d * 0.6;
@@ -853,7 +992,7 @@ function buildSkyline(group, r, a) {
       const sn = Math.sin(rotY);
       const px = x + ox * cs + oz * sn;
       const pz = z - ox * sn + oz * cs;
-      if (style === 'residential' || style === 'heritage') {
+      if (tankStyle) {
         if (tanks.count < tanks.instanceMatrix.count) {
           dummy.position.set(px, h, pz);
           dummy.rotation.set(0, 0, 0);
@@ -870,7 +1009,7 @@ function buildSkyline(group, r, a) {
       }
     }
   }
-  group.add(tanks, acUnits);
+  group.add(tanks, acUnits, mansards);
 }
 
 function buildMountains(group, r) {

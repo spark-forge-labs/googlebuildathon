@@ -1,5 +1,5 @@
 import { GameEngine } from './game/engine.js';
-import { CITIES, getCityById } from './game/cities.js';
+import { CITIES, REGIONS, getCityById } from './game/cities.js';
 import { CAR_CATALOG } from './game/cars.js';
 import { fetchTop10, renderLeaderboard, sanitizeName, leaderboardOnline } from './game/leaderboard.js';
 import { ACTIONS, keyLabel } from './game/settings.js';
@@ -61,19 +61,37 @@ const canvas = document.getElementById('game-canvas');
 const engine = new GameEngine(canvas, ui);
 if (new URLSearchParams(location.search).has('debug')) window.__engine = engine;
 
-// Populate the 15 Indian city circuits
+// City circuits, grouped into INDIA and WORLD TOUR tabs
+let activeRegion = getCityById(engine.selectedCityId).region || 'india';
+const regionTabs = document.getElementById('region-tabs');
+
 function renderCitySelector() {
   const activeCity = getCityById(engine.selectedCityId);
-  ui.citySubtitle.textContent = `${activeCity.name} (${activeCity.nativeName}) — ${activeCity.subtitle}`;
+  const native = activeCity.nativeName && activeCity.nativeName !== activeCity.name ? ` (${activeCity.nativeName})` : '';
+  ui.citySubtitle.textContent = `${activeCity.name}${native} — ${activeCity.subtitle}`;
 
-  ui.cityGrid.innerHTML = CITIES.map(
-    (city) => `
+  regionTabs.innerHTML = REGIONS.map((r) => {
+    const n = CITIES.filter((c) => c.region === r.id).length;
+    const on = r.id === activeRegion;
+    return `<button class="region-tab ${on ? 'on' : ''}" role="tab" aria-selected="${on}" data-region="${r.id}">${r.label} <small>${n}</small></button>`;
+  }).join('');
+  regionTabs.querySelectorAll('.region-tab').forEach((b) =>
+    b.addEventListener('click', () => {
+      activeRegion = b.dataset.region;
+      renderCitySelector();
+    })
+  );
+
+  ui.cityGrid.innerHTML = CITIES.filter((c) => c.region === activeRegion)
+    .map(
+      (city) => `
     <div class="city-chip ${city.id === engine.selectedCityId ? 'selected' : ''}" data-city-id="${city.id}">
       <div class="city-dot" style="background:${city.badgeColor};"></div>
       <div class="city-en">${city.name}</div>
       <div class="city-native">${city.nativeName}</div>
     </div>`
-  ).join('');
+    )
+    .join('');
 
   ui.cityGrid.querySelectorAll('.city-chip').forEach((el) => {
     el.addEventListener('click', () => {
@@ -116,6 +134,34 @@ function renderCarSelector() {
 
 renderCitySelector();
 renderCarSelector();
+
+// Arriving from MandirGlobe (hindutemples.vercel.app): title card + a way back to the atlas
+{
+  const params = new URLSearchParams(location.search);
+  const from = params.get('from');
+  if (params.get('city')) {
+    const city = getCityById(engine.selectedCityId);
+    const card = document.createElement('div');
+    card.className = 'arrival-card';
+    card.innerHTML = `<small>${city.region === 'world' ? 'WORLD TOUR' : 'INDIA GP'} • ARRIVING</small><b>${city.name.toUpperCase()} GRAND PRIX</b><span>${city.subtitle}</span>`;
+    document.body.appendChild(card);
+    setTimeout(() => card.classList.add('gone'), 4600);
+    setTimeout(() => card.remove(), 5600);
+  }
+  if (from === 'mandirglobe') {
+    const back = document.createElement('a');
+    back.className = 'back-to-atlas';
+    back.textContent = '← MandirGlobe';
+    const embedded = window.parent !== window;
+    back.href = 'https://hindutemples.vercel.app/explore';
+    back.addEventListener('click', (e) => {
+      if (!embedded) return;
+      e.preventDefault();
+      window.parent.postMessage({ type: 'indiagp:close' }, '*');
+    });
+    document.body.appendChild(back);
+  }
+}
 
 // UI Buttons
 // On phones, starting a race switches tilt controls on automatically (inside the tap, so

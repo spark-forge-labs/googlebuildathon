@@ -44,6 +44,39 @@
     },
     "srinagar": {
       "lapLength": 404.03
+    },
+    "london": {
+      "lapLength": 407.62
+    },
+    "paris": {
+      "lapLength": 406.28
+    },
+    "newyork": {
+      "lapLength": 406.22
+    },
+    "mexicocity": {
+      "lapLength": 408.17
+    },
+    "sanfrancisco": {
+      "lapLength": 409.27
+    },
+    "dallas": {
+      "lapLength": 407.66
+    },
+    "toronto": {
+      "lapLength": 408.6
+    },
+    "sydney": {
+      "lapLength": 407.12
+    },
+    "shanghai": {
+      "lapLength": 407.48
+    },
+    "hongkong": {
+      "lapLength": 407.21
+    },
+    "bangkok": {
+      "lapLength": 406.26
     }
   },
   "cars": [

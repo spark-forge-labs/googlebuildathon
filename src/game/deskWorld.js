@@ -807,7 +807,7 @@ export class DeskWorld {
 
     // Rotate Marina & Pondicherry Lighthouse beams smoothly!
     for (const b of this.rotatingBeacons) {
-      b.rotation.y += dt * 1.15;
+      b.rotation.y += dt * (b.userData.spin ?? 1.15);
     }
   }
 }

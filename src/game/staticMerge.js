@@ -16,48 +16,78 @@ export function mergeStaticMeshes(root, exclude = new Set(), opts = {}) {
   const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
   const canonical = new Map(); // material signature -> material
   const groups = new Map();
+  const multi = new Set(); // multi-material meshes split into per-material parts
   let before = 0;
 
   const skip = (o) => {
     for (let p = o; p && p !== root; p = p.parent) if (exclude.has(p)) return true;
     return false;
   };
-
-  root.traverse((o) => {
-    if (!o.isMesh) return;
-    before++;
-    if (o.isInstancedMesh || o.isSkinnedMesh || !o.visible || Array.isArray(o.material)) return;
-    const m = o.material;
-    if (!m || m.transparent || m.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile) return;
-    if (exclude.has(m) || skip(o)) return;
-    if (o.geometry.morphAttributes && Object.keys(o.geometry.morphAttributes).length) return;
-
-    const sig = materialSignature(m);
-    if (!canonical.has(sig)) canonical.set(sig, m);
-    const attrs = Object.keys(o.geometry.attributes)
+  const mergeable = (m) =>
+    m && !m.transparent && m.onBeforeCompile === THREE.Material.prototype.onBeforeCompile && !exclude.has(m);
+  const attrKey = (geo) =>
+    Object.keys(geo.attributes)
       .sort()
       .map((n) => {
-        const a = o.geometry.attributes[n];
+        const a = geo.attributes[n];
         if (a.isInterleavedBufferAttribute) return `${n}:il`;
         return `${n}:${a.itemSize}${a.array.constructor.name}${a.normalized ? 'n' : ''}`;
       })
       .join(',');
+  const add = (o, m, part) => {
+    const sig = materialSignature(m);
+    if (!canonical.has(sig)) canonical.set(sig, m);
     const tag = opts.tag ? opts.tag(o) : '';
-    if (attrs.includes(':il')) return;
-    const key = `${sig}#${attrs}#${o.geometry.index ? 'i' : 'n'}#${o.castShadow ? 1 : 0}${o.receiveShadow ? 1 : 0}#${tag}`;
-    if (!groups.has(key)) groups.set(key, { material: canonical.get(sig), meshes: [], cast: o.castShadow, receive: o.receiveShadow, tag });
-    groups.get(key).meshes.push(o);
+    const key = `${sig}#${attrKey(o.geometry)}#${o.geometry.index ? 'i' : 'n'}#${o.castShadow ? 1 : 0}${o.receiveShadow ? 1 : 0}#${tag}`;
+    if (!groups.has(key)) groups.set(key, { material: canonical.get(sig), items: [], cast: o.castShadow, receive: o.receiveShadow, tag });
+    groups.get(key).items.push({ mesh: o, part });
+  };
+
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    before++;
+    if (o.isInstancedMesh || o.isSkinnedMesh || !o.visible || skip(o)) return;
+    if (o.geometry.morphAttributes && Object.keys(o.geometry.morphAttributes).length) return;
+    if (attrKey(o.geometry).includes(':il')) return;
+    if (Array.isArray(o.material)) {
+      // e.g. facade boxes (walls + roof): split by geometry group, only if every part can be baked
+      const gs = o.geometry.groups;
+      if (!gs.length || !gs.every((g) => mergeable(o.material[g.materialIndex]))) return;
+      multi.add(o);
+      gs.forEach((g) => add(o, o.material[g.materialIndex], g));
+      return;
+    }
+    if (!mergeable(o.material)) return;
+    add(o, o.material, null);
   });
 
-  let merged = 0;
-  for (const g of groups.values()) {
-    if (g.meshes.length < 2) continue;
-    const geos = g.meshes.map((mesh) => {
-      const geo = mesh.geometry.clone();
+  const partGeometry = (mesh, part) => {
+    const src = mesh.geometry;
+    let geo;
+    if (!part) {
+      geo = src.clone();
       geo.clearGroups(); // single-material mesh: cylinder cap groups are irrelevant
-      geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(rootInv, mesh.matrixWorld));
-      return geo;
-    });
+    } else {
+      geo = new THREE.BufferGeometry();
+      for (const [n, a] of Object.entries(src.attributes)) geo.setAttribute(n, a.clone());
+      if (src.index) geo.setIndex(Array.from(src.index.array.slice(part.start, part.start + part.count)));
+      else {
+        for (const [n, a] of Object.entries(src.attributes)) {
+          const arr = a.array.slice(part.start * a.itemSize, (part.start + part.count) * a.itemSize);
+          geo.setAttribute(n, new THREE.BufferAttribute(arr, a.itemSize, a.normalized));
+        }
+      }
+    }
+    geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(rootInv, mesh.matrixWorld));
+    return geo;
+  };
+
+  let after = before;
+  const removed = new Set();
+  for (const g of groups.values()) {
+    // plain meshes need a partner to be worth baking; split multi-material parts always bake
+    if (g.items.length < 2 && !g.items.some((it) => it.part)) continue;
+    const geos = g.items.map((it) => partGeometry(it.mesh, it.part));
     let mergedGeo = null;
     try {
       mergedGeo = mergeGeometries(geos, false);
@@ -65,17 +95,30 @@ export function mergeStaticMeshes(root, exclude = new Set(), opts = {}) {
       mergedGeo = null;
     }
     geos.forEach((geo) => geo.dispose());
-    if (!mergedGeo) continue;
+    if (!mergedGeo) {
+      // a multi-material mesh we can't bake must stay whole
+      g.items.forEach((it) => it.part && multi.delete(it.mesh));
+      continue;
+    }
     mergedGeo.computeBoundingSphere();
     const mesh = new THREE.Mesh(mergedGeo, g.material);
     mesh.castShadow = g.cast;
     mesh.receiveShadow = g.receive;
     mesh.name = g.tag || 'merged-static';
     root.add(mesh);
-    for (const old of g.meshes) old.parent.remove(old);
-    merged += g.meshes.length - 1;
+    after++;
+    for (const it of g.items) {
+      if (it.part || removed.has(it.mesh)) continue;
+      it.mesh.parent.remove(it.mesh);
+      removed.add(it.mesh);
+      after--;
+    }
   }
-  return { before, after: before - merged };
+  for (const o of multi) {
+    if (o.parent) o.parent.remove(o);
+    after--;
+  }
+  return { before, after };
 }
 
 function hex(c) {

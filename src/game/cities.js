@@ -1,11 +1,12 @@
 import * as THREE from 'three';
+import { WORLD_CITIES } from './worldCities.js';
 
 /**
- * Configuration for all 15 iconic Indian racing cities.
+ * Configuration for the 15 iconic Indian racing cities (the 11 World Tour cities live in worldCities.js).
  * Every city has a unique closed 3D circuit layout, sky/lighting atmosphere,
  * regional script branding, signature bridge architecture, and iconic towers.
  */
-export const CITIES = [
+const INDIA_CITIES = [
   {
     id: 'hyderabad',
     name: 'Hyderabad',
@@ -890,6 +891,13 @@ export const CITIES = [
       [-57, 0.16, 45],
     ],
   },
+];
+
+export const CITIES = [...INDIA_CITIES.map((c) => ({ region: 'india', ...c })), ...WORLD_CITIES];
+
+export const REGIONS = [
+  { id: 'india', label: 'INDIA' },
+  { id: 'world', label: 'WORLD TOUR' },
 ];
 
 export function getCityById(id) {
