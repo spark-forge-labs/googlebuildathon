@@ -1,6 +1,7 @@
 import { GameEngine } from './game/engine.js';
 import { CITIES, getCityById } from './game/cities.js';
 import { CAR_CATALOG } from './game/cars.js';
+import { fetchTop10, renderLeaderboard, sanitizeName, leaderboardOnline } from './game/leaderboard.js';
 
 const ui = {
   startOverlay: document.getElementById('start-overlay'),
@@ -37,6 +38,9 @@ const ui = {
   motionStatusText: document.getElementById('motion-status-text'),
   pedalFill: document.getElementById('pedal-fill'),
   tiltReadout: document.getElementById('tilt-readout'),
+  finishLbTitle: document.getElementById('finish-lb-title'),
+  finishLbList: document.getElementById('finish-lb-list'),
+  finishLbStatus: document.getElementById('finish-lb-status'),
   gyroWheelHud: document.getElementById('gyro-wheel-hud'),
   gyroWheelSvg: document.getElementById('gyro-wheel-svg'),
   touchSteerArrows: document.getElementById('touch-steer-arrows'),
@@ -56,7 +60,7 @@ const canvas = document.getElementById('game-canvas');
 const engine = new GameEngine(canvas, ui);
 if (new URLSearchParams(location.search).has('debug')) window.__engine = engine;
 
-// Populate 7 Indian City Circuits
+// Populate the 15 Indian city circuits
 function renderCitySelector() {
   const activeCity = getCityById(engine.selectedCityId);
   ui.citySubtitle.textContent = `${activeCity.name} (${activeCity.nativeName}) — ${activeCity.subtitle}`;
@@ -116,10 +120,73 @@ renderCarSelector();
 // On phones, starting a race switches tilt controls on automatically (inside the tap, so
 // iOS can show its motion-permission prompt).
 const isTouchDevice = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || navigator.maxTouchPoints > 0;
+// ---------- Player name (required before racing) ----------
+const nameInput = document.getElementById('player-name');
+const nameHint = document.getElementById('name-hint');
+nameInput.value = engine.playerName || '';
+nameInput.addEventListener('input', () => {
+  nameInput.classList.remove('invalid');
+  nameHint.classList.remove('error');
+  nameHint.textContent = 'Shown on the leaderboard';
+  engine.setPlayerName(nameInput.value);
+});
+
+function ensurePlayerName() {
+  const name = sanitizeName(nameInput.value);
+  if (name) {
+    engine.setPlayerName(name);
+    return true;
+  }
+  nameInput.classList.remove('invalid');
+  void nameInput.offsetWidth; // restart the shake animation
+  nameInput.classList.add('invalid');
+  nameHint.classList.add('error');
+  nameHint.textContent = 'Enter your name to race';
+  nameInput.focus();
+  return false;
+}
+
 function startRaceFromTap() {
+  if (engine.state === 'MENU' && !ensurePlayerName()) return;
   if (isTouchDevice && !engine.motion.enabled) engine.toggleMotionSteering();
   engine.startRace();
 }
+
+// ---------- Leaderboard overlay ----------
+const lbOverlay = document.getElementById('lb-overlay');
+let lbCityIndex = 0;
+async function showLeaderboard(cityId) {
+  lbCityIndex = Math.max(0, CITIES.findIndex((c) => c.id === cityId));
+  lbOverlay.classList.remove('hidden');
+  await refreshLeaderboard();
+}
+async function refreshLeaderboard() {
+  const city = CITIES[lbCityIndex];
+  document.getElementById('lb-city').textContent = `${city.name.toUpperCase()}`;
+  const list = document.getElementById('lb-list');
+  const status = document.getElementById('lb-status');
+  list.innerHTML = '<div class="lb-empty">Loading…</div>';
+  status.textContent = '';
+  const { rows, source } = await fetchTop10(city.id);
+  if (CITIES[lbCityIndex].id !== city.id) return; // user moved on
+  renderLeaderboard(list, rows, null);
+  status.textContent =
+    source === 'online'
+      ? `${city.nativeName} • live from the BeyondGravity leaderboard`
+      : leaderboardOnline
+        ? 'Could not reach BeyondGravity right now: showing times saved on this device'
+        : 'Times saved on this device';
+}
+document.getElementById('btn-leaderboard').addEventListener('click', () => showLeaderboard(engine.selectedCityId));
+document.getElementById('lb-prev').addEventListener('click', () => {
+  lbCityIndex = (lbCityIndex - 1 + CITIES.length) % CITIES.length;
+  refreshLeaderboard();
+});
+document.getElementById('lb-next').addEventListener('click', () => {
+  lbCityIndex = (lbCityIndex + 1) % CITIES.length;
+  refreshLeaderboard();
+});
+document.getElementById('lb-close').addEventListener('click', () => lbOverlay.classList.add('hidden'));
 document.getElementById('btn-start-race').addEventListener('click', startRaceFromTap);
 document.getElementById('btn-race-again').addEventListener('click', startRaceFromTap);
 document.getElementById('btn-back-menu').addEventListener('click', () => engine.backToMenu());
@@ -174,6 +241,11 @@ function setKey(code, pressed) {
 }
 
 window.addEventListener('keydown', (e) => {
+  const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+  if (typing) {
+    if (e.code === 'Enter' && engine.state === 'MENU') startRaceFromTap();
+    return;
+  }
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
     e.preventDefault();
   }
@@ -183,7 +255,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyM') engine.toggleAudio();
     if (e.code === 'KeyB') engine.toggleMusic();
     if (e.code === 'KeyR') engine.resetPlayerCar();
-    if (e.code === 'Enter' && engine.state === 'MENU') engine.startRace();
+    if (e.code === 'Enter' && engine.state === 'MENU') startRaceFromTap();
   }
 });
 

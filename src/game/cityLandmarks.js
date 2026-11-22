@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeRealWaterMaterial, facadeTextures } from './realWorld.js';
+import { buildNewCityLandmarks } from './newCityLandmarks.js';
 
 /**
  * Modular 3D Iconic Towers, Monuments & Signature Bridges for all 7 Indian cities.
@@ -17,7 +18,7 @@ function rightHandedRoadQuaternion(tangent) {
 /**
  * Shared helper for a shimmering tabletop water basin (Hussain Sagar, Arabian Sea, Hooghly, Bay of Bengal, Yamuna).
  */
-function addWaterBasin(group, waterMeshes, x, z, radius, colorHex = 0x0d9488, emissiveHex = 0x074d52, rimColor = 0xb8aa94) {
+export function addWaterBasin(group, waterMeshes, x, z, radius, colorHex = 0x0d9488, emissiveHex = 0x074d52, rimColor = 0xb8aa94) {
   const rim = new THREE.Mesh(
     new THREE.TorusGeometry(radius + 0.5, 0.95, 10, 40),
     new THREE.MeshStandardMaterial({ color: rimColor, roughness: 0.75 })
@@ -38,7 +39,7 @@ function addWaterBasin(group, waterMeshes, x, z, radius, colorHex = 0x0d9488, em
   waterMeshes.push(water);
 }
 
-function addTowerSkyscraper(parent, { x, z, w, h, d, color = 0x0f2b5c, accent = 0x38bdf8, spire = false }) {
+export function addTowerSkyscraper(parent, { x, z, w, h, d, color = 0x0f2b5c, accent = 0x38bdf8, spire = false }) {
   const tex = facadeTextures().glass.clone();
   tex.userData = {};
   tex.needsUpdate = true;
@@ -508,6 +509,9 @@ export function buildCityLandmarks(city, group, animTargets) {
     // Rushikonda IT SEZ Glass Skyline & Visakhapatnam Port Cranes
     buildVizagPortSkyline(group, 78, -52);
     addCol(78, -52, 16);
+  } else {
+    // Warangal, Kochi, Goa, Pune, Ahmedabad, Srinagar
+    buildNewCityLandmarks(city, group, animTargets, addCol);
   }
 
   return colliders;

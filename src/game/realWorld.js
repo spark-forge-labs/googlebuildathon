@@ -32,6 +32,18 @@ export const REAL_ATMOS = {
                  skyline: { tall: 0.12, maxH: 85,  styles: [0.25, 0.25, 0.5, 0] }, trees: [3, 2, 1, 2, 1] },
   vizag:       { elev: 34, azim: 110, turbidity: 3,  rayleigh: 2.2, ground: 'garden', coast: 'east', haze: 0xb9d0dc, hdri: 'blouberg_sunrise_2_1k.hdr',
                  skyline: { tall: 0.18, maxH: 100, styles: [0.35, 0.2, 0.45, 0] }, trees: [3, 1, 2, 2, 1] },
+  warangal:    { elev: 26, azim: 205, turbidity: 7,  rayleigh: 1.6, ground: 'deccan', coast: null,   haze: 0xcbb99c, hdri: 'quarry_01_1k.hdr',
+                 skyline: { tall: 0.04, maxH: 45,  styles: [0.1, 0.3, 0.6, 0] }, trees: [3, 2, 1, 2, 1] },
+  kochi:       { elev: 20, azim: 255, turbidity: 6,  rayleigh: 2.3, ground: 'tropical', coast: 'west', haze: 0xc4d3c8, hdri: 'venice_sunset_1k.hdr',
+                 skyline: { tall: 0.14, maxH: 90,  styles: [0.3, 0.2, 0.5, 0] }, trees: [2, 1, 3, 2, 2] },
+  goa:         { elev: 12, azim: 255, turbidity: 5,  rayleigh: 2.6, ground: 'sandy', coast: 'west', haze: 0xe8c2a0, hdri: 'venice_sunset_1k.hdr',
+                 skyline: { tall: 0.0,  maxH: 26,  styles: [0.0, 0.1, 0.35, 0.55] }, trees: [2, 1, 3, 2, 2] },
+  pune:        { elev: 32, azim: 190, turbidity: 6,  rayleigh: 1.7, ground: 'deccan', coast: null,   haze: 0xc2c4c8, hdri: 'quarry_01_1k.hdr',
+                 skyline: { tall: 0.22, maxH: 100, styles: [0.4, 0.25, 0.35, 0] }, trees: [3, 2, 1, 2, 1] },
+  ahmedabad:   { elev: 24, azim: 230, turbidity: 11, rayleigh: 1.3, ground: 'dry',    coast: null,   haze: 0xd4b892, hdri: 'quarry_01_1k.hdr',
+                 skyline: { tall: 0.15, maxH: 95,  styles: [0.3, 0.3, 0.3, 0.1] }, trees: [2, 3, 1, 2, 2] },
+  srinagar:    { elev: 30, azim: 160, turbidity: 2,  rayleigh: 1.4, ground: 'alpine', coast: null,   haze: 0xc8d6e4, hdri: 'blouberg_sunrise_2_1k.hdr',
+                 skyline: { tall: 0.0,  maxH: 22,  styles: [0.0, 0.05, 0.45, 0.5] }, trees: [3, 2, 1, 3, 1], mountains: true, autumn: true },
 };
 
 const GROUND_PALETTE = {
@@ -41,6 +53,8 @@ const GROUND_PALETTE = {
   delta: ['#4d7a3a', '#5e8a42', '#6b7f45', '#4a6e33'],
   dry: ['#9a8460', '#86774f', '#a38f68', '#7d7a4e'],
   sandy: ['#b9a27a', '#a8946a', '#7f8a4c', '#c4ae86'],
+  tropical: ['#3f7a2c', '#2f6b25', '#4f8a35', '#5a7d2e'],
+  alpine: ['#5e8a42', '#6b9a4a', '#7a8f4a', '#4f7a3a'],
 };
 
 function rand(seed) {
@@ -490,7 +504,7 @@ export function updateTreeWind(time) {
   windUniforms.uTime.value = time;
 }
 
-function makeLeafMaterial(src) {
+function makeLeafMaterial(src, grayscale = false) {
   const m = new THREE.MeshStandardMaterial({
     map: src.map,
     color: src.color.clone(),
@@ -516,8 +530,16 @@ function makeLeafMaterial(src) {
         mvPosition = modelViewMatrix * mvPosition;
         gl_Position = projectionMatrix * mvPosition;`
       );
+    if (grayscale) {
+      // Autumn variant: luminance-only leaves, the hue comes from per-instance colour
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        '#include <map_fragment>\n  diffuseColor.rgb = vec3(dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114))) * 2.4;'
+      );
+    }
   };
-  m.customProgramCacheKey = () => 'ezleaf-wind';
+  m.customProgramCacheKey = () => (grayscale ? 'ezleaf-wind-gray' : 'ezleaf-wind');
+  if (grayscale) m.color.set(0xffffff);
   return keep(m);
 }
 
@@ -618,6 +640,7 @@ export function ensureTreeVariants(renderer) {
         })
       );
       const leafMat = makeLeafMaterial(lSrc);
+      const leafMatAutumn = makeLeafMaterial(lSrc, true);
       const impostor = renderImpostor(renderer, bGeo, lGeo, bSrc, lSrc);
       const canopy = new THREE.Box3().setFromBufferAttribute(lGeo.attributes.position);
       treeVariants.push({
@@ -625,6 +648,7 @@ export function ensureTreeVariants(renderer) {
         leafGeo: lGeo,
         branchMat,
         leafMat,
+        leafMatAutumn,
         impostor,
         radius: Math.max(canopy.max.x - canopy.min.x, canopy.max.z - canopy.min.z) / 2,
         height: spec.height,
@@ -849,7 +873,46 @@ function buildSkyline(group, r, a) {
   group.add(tanks, acUnits);
 }
 
+function buildMountains(group, r) {
+  // Snow-capped Himalayan ridge (Zabarwan / Pir Panjal) ringing the valley
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: false });
+  const rock = new THREE.Color(0x6b6a62);
+  const grass = new THREE.Color(0x4f6b3a);
+  const snow = new THREE.Color(0xf4f7fb);
+  for (let i = 0; i < 16; i++) {
+    const ang = (i / 16) * Math.PI * 2 + r() * 0.3;
+    const rad = 620 + r() * 220;
+    const geo = new THREE.ConeGeometry(1, 1, 24, 8, false);
+    geo.translate(0, 0.5, 0);
+    const pos = geo.attributes.position;
+    const cols = [];
+    const seed = r() * 10;
+    for (let v = 0; v < pos.count; v++) {
+      const x = pos.getX(v);
+      const z = pos.getZ(v);
+      let y = pos.getY(v);
+      const n = 1 + 0.18 * Math.sin(x * 9 + seed) * Math.cos(z * 7 - seed) + 0.08 * Math.sin(x * 23 + z * 19);
+      pos.setX(v, x * n);
+      pos.setZ(v, z * n);
+      y = y * (0.92 + 0.12 * Math.sin(x * 5 + z * 4 + seed));
+      pos.setY(v, y);
+      const c = y > 0.62 ? snow : y > 0.3 ? rock.clone().lerp(snow, Math.max(0, (y - 0.5) * 3)) : grass.clone().lerp(rock, y / 0.3);
+      cols.push(c.r, c.g, c.b);
+    }
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(Math.cos(ang) * rad, -4, Math.sin(ang) * rad);
+    m.scale.set(170 + r() * 140, 160 + r() * 140, 150 + r() * 120);
+    group.add(m);
+  }
+}
+
 function buildHills(group, r, a) {
+  if (a.mountains) {
+    buildMountains(group, r);
+    return;
+  }
   const mat = new THREE.MeshStandardMaterial({ color: a.ground === 'dry' ? 0x8a7a5a : 0x55704a, roughness: 1 });
   for (let i = 0; i < 14; i++) {
     const ang = r() * Math.PI * 2;
@@ -937,7 +1000,7 @@ function buildTrees(group, r, a, track, avoid) {
     const list = heroPlacements[vi];
     if (!list.length) return;
     const branches = new THREE.InstancedMesh(v.branchGeo, v.branchMat, list.length);
-    const leaves = new THREE.InstancedMesh(v.leafGeo, v.leafMat, list.length);
+    const leaves = new THREE.InstancedMesh(v.leafGeo, a.autumn ? v.leafMatAutumn : v.leafMat, list.length);
     list.forEach((p, i) => {
       dummy.position.set(p.x, 0, p.z);
       dummy.rotation.set(0, p.rot, 0);
@@ -945,8 +1008,14 @@ function buildTrees(group, r, a, track, avoid) {
       dummy.updateMatrix();
       branches.setMatrixAt(i, dummy.matrix);
       leaves.setMatrixAt(i, dummy.matrix);
-      col.setHSL(0.25 + (r() - 0.5) * 0.06, 0.55 + r() * 0.2, 0.42 + r() * 0.14);
-      col.lerp(new THREE.Color(1, 1, 1), 0.55);
+      if (a.autumn) {
+        // Kashmir chinar in autumn: flame orange, crimson and gold, with some still green
+        if (r() < 0.75) col.setHSL(0.015 + r() * 0.1, 0.9, 0.42 + r() * 0.1);
+        else col.setHSL(0.26, 0.6, 0.32);
+      } else {
+        col.setHSL(0.25 + (r() - 0.5) * 0.06, 0.55 + r() * 0.2, 0.42 + r() * 0.14);
+        col.lerp(new THREE.Color(1, 1, 1), 0.55);
+      }
       if (dryTint) col.multiply(dryTint);
       leaves.setColorAt(i, col);
     });
@@ -980,7 +1049,8 @@ function buildTrees(group, r, a, track, avoid) {
       dummy.scale.setScalar(p.s);
       dummy.updateMatrix();
       m.setMatrixAt(i, dummy.matrix);
-      col.setHSL(0.25, 0.2, 0.75 + r() * 0.25);
+      if (a.autumn && r() < 0.5) col.setHSL(0.05 + r() * 0.06, 0.6, 0.8);
+      else col.setHSL(0.25, 0.2, 0.75 + r() * 0.25);
       if (dryTint) col.multiply(dryTint);
       m.setColorAt(i, col);
     });

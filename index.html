@@ -119,21 +119,31 @@
       <!-- Start Menu Overlay -->
       <div id="start-overlay" class="overlay">
         <div class="menu-panel">
-          <div class="menu-badge">INDIA GRAND PRIX • 9 ICONIC CITIES</div>
+          <div class="menu-badge">INDIA GRAND PRIX • 15 ICONIC CITIES</div>
           <h1 class="menu-title">INDIA <span>GP</span></h1>
           <p class="menu-subtitle" id="city-subtitle">
             Charminar • Hussain Sagar • Cable Bridge • Cyber Towers
           </p>
 
-          <!-- 7-City Selector -->
+          <!-- Player name (required before racing, remembered on this device) -->
           <div class="section-block">
-            <div class="section-label">1. SELECT YOUR CITY CIRCUIT</div>
+            <div class="section-label">1. ENTER YOUR NAME</div>
+            <div class="name-row">
+              <input id="player-name" class="name-input" type="text" maxlength="16" autocomplete="nickname"
+                     placeholder="Your racing name" aria-label="Your racing name" />
+              <span id="name-hint" class="name-hint">Shown on the leaderboard</span>
+            </div>
+          </div>
+
+          <!-- City Selector -->
+          <div class="section-block">
+            <div class="section-label">2. SELECT YOUR CITY CIRCUIT</div>
             <div class="city-grid" id="city-grid"></div>
           </div>
 
           <!-- 5-Car Selector -->
           <div class="section-block">
-            <div class="section-label">2. SELECT YOUR RIDE</div>
+            <div class="section-label">3. SELECT YOUR RIDE</div>
             <div class="car-grid" id="car-grid"></div>
           </div>
 
@@ -153,6 +163,7 @@
 
           <div class="menu-actions">
             <button id="btn-start-race" class="primary-btn">START RACE</button>
+            <button id="btn-leaderboard" class="secondary-btn">LEADERBOARD</button>
           </div>
           <p class="menu-credits">Ferrari 458 Italia 3D model by vicent091036 (CC BY 4.0) • Trees by EZ-Tree • HDRIs from Poly Haven (CC0)</p>
         </div>
@@ -177,11 +188,38 @@
               <span class="val mono" id="finish-top-speed">0 KM/H</span>
             </div>
           </div>
-          <div class="standings-list" id="finish-standings"></div>
+          <div class="finish-columns">
+            <div>
+              <div class="lb-title">THIS RACE</div>
+              <div class="standings-list" id="finish-standings"></div>
+            </div>
+            <div>
+              <div class="lb-title" id="finish-lb-title">TOP 10</div>
+              <div class="lb-list" id="finish-lb-list"></div>
+              <div class="lb-status" id="finish-lb-status"></div>
+            </div>
+          </div>
           <div class="menu-actions">
             <button id="btn-race-again" class="primary-btn">RACE AGAIN</button>
             <button id="btn-back-menu" class="secondary-btn">CHANGE CITY / CAR</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Leaderboard Overlay (from the menu) -->
+    <div id="lb-overlay" class="overlay hidden">
+      <div class="menu-panel lb-panel">
+        <div class="menu-badge">TOP 10 FASTEST RACES</div>
+        <div class="lb-city-row">
+          <button id="lb-prev" class="secondary-btn lb-arrow" aria-label="Previous city">◀</button>
+          <h2 class="finish-title lb-city" id="lb-city">HYDERABAD</h2>
+          <button id="lb-next" class="secondary-btn lb-arrow" aria-label="Next city">▶</button>
+        </div>
+        <div class="lb-list" id="lb-list"></div>
+        <div class="lb-status" id="lb-status"></div>
+        <div class="menu-actions">
+          <button id="lb-close" class="primary-btn">BACK</button>
         </div>
       </div>
     </div>

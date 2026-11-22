@@ -538,7 +538,7 @@ body,
 /* 9-City Selector Grid (3x3 or responsive auto-fit) */
 .city-grid {
   display: grid;
-  grid-template-columns: repeat(9, 1fr);
+  grid-template-columns: repeat(8, 1fr);
   gap: 6px;
 }
 
@@ -887,7 +887,7 @@ body,
 
 @media (max-width: 860px) {
   .city-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(5, 1fr);
   }
   .car-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -916,4 +916,135 @@ body,
   color: rgba(255, 255, 255, 0.75);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
   white-space: nowrap;
+}
+
+/* ---------- Player name ---------- */
+.name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.name-input {
+  flex: 1 1 220px;
+  max-width: 340px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font: 700 15px/1.2 inherit;
+  font-family: inherit;
+  letter-spacing: 0.02em;
+  outline: none;
+}
+.name-input:focus {
+  border-color: #f7c948;
+  box-shadow: 0 0 0 3px rgba(247, 201, 72, 0.18);
+}
+.name-input.invalid {
+  border-color: #ef4444;
+  animation: name-shake 0.35s;
+}
+.name-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+.name-hint.error {
+  color: #f87171;
+  font-weight: 700;
+}
+@keyframes name-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+
+/* ---------- Leaderboard ---------- */
+.finish-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 10px 0 4px;
+  text-align: left;
+}
+.lb-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #f7c948;
+  margin-bottom: 6px;
+}
+.lb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lb-row {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+.lb-row .rank {
+  font-weight: 900;
+  color: rgba(255, 255, 255, 0.6);
+}
+.lb-row:nth-child(1) .rank { color: #fbbf24; }
+.lb-row:nth-child(2) .rank { color: #e5e7eb; }
+.lb-row:nth-child(3) .rank { color: #d97706; }
+.lb-row .who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lb-row .who small {
+  opacity: 0.55;
+  font-size: 10px;
+  margin-left: 4px;
+}
+.lb-row .time {
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 700;
+}
+.lb-row.is-you {
+  background: rgba(247, 201, 72, 0.18);
+  outline: 1px solid rgba(247, 201, 72, 0.55);
+}
+.lb-empty {
+  font-size: 12px;
+  opacity: 0.6;
+  padding: 10px 2px;
+}
+.lb-status {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.6);
+}
+.lb-panel {
+  max-width: 520px;
+}
+.lb-city-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 6px 0 12px;
+}
+.lb-city {
+  margin: 0;
+  font-size: 26px;
+}
+.lb-arrow {
+  min-width: 46px;
+  padding: 8px 0;
+}
+@media (max-width: 640px) {
+  .finish-columns {
+    grid-template-columns: 1fr;
+  }
 }
