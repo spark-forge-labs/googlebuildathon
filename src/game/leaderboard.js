@@ -7,8 +7,9 @@
  *   VITE_SUPABASE_ANON_KEY=<public anon key>
  * Without them (or when offline) scores are kept on this device instead.
  */
-const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const ENV = import.meta.env || {};
+const SUPABASE_URL = (ENV.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+const SUPABASE_KEY = ENV.VITE_SUPABASE_ANON_KEY || '';
 const TABLE = 'race_leaderboard';
 
 export const leaderboardOnline = Boolean(SUPABASE_URL && SUPABASE_KEY);
@@ -70,8 +71,13 @@ export async function fetchTop10(city) {
   return { rows: readLocal(city), source: 'device' };
 }
 
-/** Saves a finished race. Always keeps a copy on the device; returns where it was stored. */
-export async function submitScore({ name, city, totalMs, bestLapMs, car, position }) {
+/**
+ * Saves a finished race. A copy always stays on the device (plus your best run as a local ghost).
+ * Online, the run goes to the `submit-race` Edge Function, which validates the checkpoint and
+ * telemetry trail before it can reach the BeyondGravity leaderboard.
+ * Returns 'online', 'device', or { rejected: true, reason } when the server refuses the run.
+ */
+export async function submitScore({ name, city, totalMs, bestLapMs, car, position, telemetry }) {
   const entry = {
     player_name: sanitizeName(name) || 'Player',
     city,
@@ -81,18 +87,67 @@ export async function submitScore({ name, city, totalMs, bestLapMs, car, positio
     finish_position: position,
   };
   saveLocal(entry);
+  if (telemetry && telemetry.complete()) saveLocalGhost(entry, telemetry.samples);
   if (!leaderboardOnline) return 'device';
+  if (!telemetry || !telemetry.complete()) return { rejected: true, reason: 'race telemetry incomplete' };
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE}`, {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/submit-race`, {
       method: 'POST',
-      headers: { ...headers(), Prefer: 'return=minimal' },
-      body: JSON.stringify(entry),
+      headers: headers(),
+      body: JSON.stringify({
+        name: entry.player_name,
+        city,
+        car: entry.car,
+        position,
+        totalMs: entry.total_ms,
+        checkpoints: telemetry.checkpoints,
+        samples: telemetry.samples,
+      }),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-    return 'online';
+    if (res.ok) return 'online';
+    if (res.status === 422 || res.status === 429) {
+      const body = await res.json().catch(() => ({}));
+      return { rejected: true, reason: body.reason || 'run rejected' };
+    }
+    throw new Error(`HTTP ${res.status}`);
   } catch (e) {
     console.warn('Leaderboard submit failed, kept on this device', e);
     return 'device';
+  }
+}
+
+function saveLocalGhost(entry, samples) {
+  try {
+    const key = `hydrace-ghost-${entry.city}`;
+    const prev = JSON.parse(localStorage.getItem(key) || 'null');
+    if (!prev || entry.total_ms < prev.total_ms) {
+      localStorage.setItem(key, JSON.stringify({ player_name: entry.player_name, car: entry.car, total_ms: entry.total_ms, samples }));
+    }
+  } catch (e) {
+    /* storage full or unavailable */
+  }
+}
+
+/** Fastest replay for the city: BeyondGravity first, then your own best on this device. */
+export async function fetchGhost(city) {
+  if (leaderboardOnline) {
+    try {
+      const url =
+        `${SUPABASE_URL}/rest/v1/race_replays?select=player_name,car,total_ms,samples` +
+        `&city=eq.${encodeURIComponent(city)}&order=total_ms.asc&limit=1`;
+      const res = await fetch(url, { headers: headers() });
+      if (res.ok) {
+        const rows = await res.json();
+        if (rows.length && Array.isArray(rows[0].samples)) return rows[0];
+      }
+    } catch (e) {
+      /* fall through to the local ghost */
+    }
+  }
+  try {
+    return JSON.parse(localStorage.getItem(`hydrace-ghost-${city}`) || 'null');
+  } catch (e) {
+    return null;
   }
 }
 

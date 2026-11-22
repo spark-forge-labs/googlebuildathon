@@ -1,0 +1,4 @@
+# Only the settings this project relies on; the rest are Supabase CLI defaults.
+[functions.submit-race]
+# Accept the public anon/publishable key without JWT verification; the function validates every run itself.
+verify_jwt = false

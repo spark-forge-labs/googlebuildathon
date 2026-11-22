@@ -113,7 +113,7 @@ export class SoundEngine {
 
     // Background soundtrack on its own bus (independent of the SFX toggle)
     try {
-      this.music = new RaceMusic(this.ctx, this.ctx.destination);
+      this.music = new RaceMusic(this.ctx, this.ctx.destination, this.musicStyleId || 'mumbai');
       this.music.setEnabled(this.musicEnabled);
       this.music.start();
     } catch (e) {
@@ -122,6 +122,12 @@ export class SoundEngine {
     }
 
     this.initialized = true;
+  }
+
+  /** Each city has its own local soundtrack; switches on the next bar line. */
+  setMusicStyle(cityId) {
+    this.musicStyleId = cityId;
+    if (this.music) this.music.setStyle(cityId);
   }
 
   setMusicIntensity(level) {

@@ -3,7 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>India Desk GP — 3D City Road Racing</title>
+    <title>India GP: City Street Racing</title>
+    <meta name="description" content="Photoreal street racing through iconic city circuits. Tilt your phone to drive." />
+    <meta name="theme-color" content="#0a0e1a" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="/icons/favicon-64.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="India GP" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -119,7 +128,7 @@
       <!-- Start Menu Overlay -->
       <div id="start-overlay" class="overlay">
         <div class="menu-panel">
-          <div class="menu-badge">INDIA GRAND PRIX • 15 ICONIC CITIES</div>
+          <div class="menu-badge">INDIA GP WORLD TOUR • 26 CITY CIRCUITS</div>
           <h1 class="menu-title">INDIA <span>GP</span></h1>
           <p class="menu-subtitle" id="city-subtitle">
             Charminar • Hussain Sagar • Cable Bridge • Cyber Towers
@@ -138,6 +147,7 @@
           <!-- City Selector -->
           <div class="section-block">
             <div class="section-label">2. SELECT YOUR CITY CIRCUIT</div>
+            <div class="region-tabs" id="region-tabs" role="tablist"></div>
             <div class="city-grid" id="city-grid"></div>
           </div>
 
@@ -159,11 +169,13 @@
             <div class="ctrl-item"><kbd>Shift</kbd> Nitro</div>
             <div class="ctrl-item"><kbd>C</kbd> 4 Cameras</div>
             <div class="ctrl-item"><kbd>R</kbd> Reset</div>
+            <div class="ctrl-item">🎮 Gamepad &amp; wheel ready</div>
           </div>
 
           <div class="menu-actions">
             <button id="btn-start-race" class="primary-btn">START RACE</button>
             <button id="btn-leaderboard" class="secondary-btn">LEADERBOARD</button>
+            <button id="btn-settings" class="secondary-btn">SETTINGS</button>
           </div>
           <p class="menu-credits">Ferrari 458 Italia 3D model by vicent091036 (CC BY 4.0) • Trees by EZ-Tree • HDRIs from Poly Haven (CC0)</p>
         </div>
@@ -220,6 +232,60 @@
         <div class="lb-status" id="lb-status"></div>
         <div class="menu-actions">
           <button id="lb-close" class="primary-btn">BACK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="settings-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="menu-panel settings-panel">
+        <div class="menu-badge" id="settings-title">SETTINGS</div>
+
+        <div class="settings-section">Driving assists</div>
+        <label class="set-row">
+          <span>Auto-accelerate<small>The car drives itself forward: you steer and brake</small></span>
+          <input type="checkbox" class="set-toggle" data-setting="autoAccelerate" />
+        </label>
+        <div class="set-row">
+          <span>Steering assist<small>Gently pulls you toward the racing line</small></span>
+          <div class="seg" data-setting="steerAssist">
+            <button data-v="0">Off</button><button data-v="0.35">Light</button><button data-v="0.7">Strong</button>
+          </div>
+        </div>
+        <label class="set-row">
+          <span>Ghost car<small>Race the fastest verified run in this city</small></span>
+          <input type="checkbox" class="set-toggle" data-setting="ghost" />
+        </label>
+
+        <div class="settings-section">Accessibility</div>
+        <label class="set-row">
+          <span>Reduced camera shake<small>Calmer camera for motion sensitivity</small></span>
+          <input type="checkbox" class="set-toggle" data-setting="reducedShake" />
+        </label>
+        <label class="set-row">
+          <span>Colour-blind friendly<small>Blue / orange instead of green / red</small></span>
+          <input type="checkbox" class="set-toggle" data-setting="colorblind" />
+        </label>
+        <label class="set-row">
+          <span>Vibration<small>Feel bumps and nitro (controllers, Android phones)</small></span>
+          <input type="checkbox" class="set-toggle" data-setting="haptics" />
+        </label>
+        <div class="set-row">
+          <span>Text &amp; HUD size</span>
+          <div class="seg" data-setting="uiScale">
+            <button data-v="0.85">S</button><button data-v="1">M</button><button data-v="1.15">L</button><button data-v="1.3">XL</button>
+          </div>
+        </div>
+
+        <div class="settings-section">Keyboard</div>
+        <div id="keybinds" class="keybinds"></div>
+        <div class="set-note" id="keybind-note">Click a key, then press the new one. C, M, B, R, Enter and Esc are fixed.</div>
+
+        <div class="settings-section">Controller</div>
+        <div class="set-note" id="pad-status">No controller found. Connect a gamepad or racing wheel and press any button.</div>
+
+        <div class="menu-actions">
+          <button id="settings-reset-keys" class="secondary-btn">RESET KEYS</button>
+          <button id="settings-close" class="primary-btn">DONE</button>
         </div>
       </div>
     </div>

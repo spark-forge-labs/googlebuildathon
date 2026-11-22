@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { makeRealWaterMaterial, facadeTextures } from './realWorld.js';
 import { buildNewCityLandmarks } from './newCityLandmarks.js';
+import { buildWorldBridge } from './worldBridges.js';
+import { buildWorldLandmarks } from './worldLandmarks.js';
 
 /**
  * Modular 3D Iconic Towers, Monuments & Signature Bridges for all 7 Indian cities.
@@ -102,6 +104,11 @@ export function buildCityBridge(city, track, group, animTargets) {
         bridgeGroup.add(pier);
       }
     }
+  }
+
+  if (buildWorldBridge(city, track, bridgeGroup)) {
+    group.add(bridgeGroup);
+    return;
   }
 
   if (city.bridgeStyle === 'durgam-cable' || city.bridgeStyle === 'sea-link') {
@@ -509,6 +516,8 @@ export function buildCityLandmarks(city, group, animTargets) {
     // Rushikonda IT SEZ Glass Skyline & Visakhapatnam Port Cranes
     buildVizagPortSkyline(group, 78, -52);
     addCol(78, -52, 16);
+  } else if (city.region === 'world') {
+    buildWorldLandmarks(city, group, animTargets, addCol);
   } else {
     // Warangal, Kochi, Goa, Pune, Ahmedabad, Srinagar
     buildNewCityLandmarks(city, group, animTargets, addCol);

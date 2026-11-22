@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildCityBridge, buildCityLandmarks } from './cityLandmarks.js';
 import { buildRealWorld, updateTreeWind, weatherLandmarkMaterials } from './realWorld.js';
+import { mergeStaticMeshes } from './staticMerge.js';
 
 export const DESK_HALF_W = 110;
 export const DESK_HALF_D = 75;
@@ -280,6 +281,11 @@ export class DeskWorld {
 
     this.buildStartGantryAndBillboards();
     this.buildStreetLampsAndTrees();
+
+    // Bake static landmark/bridge/street meshes into a few draw calls (animated parts stay separate)
+    const dynamic = new Set([...this.waterMeshes, ...this.rotatingBeacons, ...this.gantryLights]);
+    for (const c of this.bridgeCables) dynamic.add(c.mesh);
+    this.mergeStats = mergeStaticMeshes(this.group, dynamic);
   }
 
   dispose() {
@@ -801,7 +807,7 @@ export class DeskWorld {
 
     // Rotate Marina & Pondicherry Lighthouse beams smoothly!
     for (const b of this.rotatingBeacons) {
-      b.rotation.y += dt * 1.15;
+      b.rotation.y += dt * (b.userData.spin ?? 1.15);
     }
   }
 }

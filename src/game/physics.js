@@ -43,6 +43,7 @@ export class Racer {
     this.lastU = 0;
     this.lap = 1;
     this.totalProgress = 0;
+    this.ctrl = { steer: 0, throttle: 0, brake: 0, nitro: 0 };
     this.finished = false;
     this.finishTime = 0;
     this.lapStartTime = 0;
@@ -128,8 +129,16 @@ export class Racer {
       throttle = input.up ? 1 : input.down ? 0 : tiltGas;
       brake = input.down ? 1 : input.up ? 0 : tiltBrake;
       this.analogPedal = !input.up && !input.down && (tiltGas > 0 || tiltBrake > 0);
-      driftHeld = input.drift;
-      nitroHeld = input.boost;
+      driftHeld = input.drift || !!input.padDrift;
+      nitroHeld = input.boost || !!input.padBoost;
+
+      // Assists (settings): auto-accelerate unless braking, gentle steering toward the racing line
+      if (input.autoAccelerate && brake < 0.05 && !input.down) throttle = Math.max(throttle, 1);
+      if (input.steerAssist > 0) {
+        const auto = this.trackSteer();
+        const manual = Math.abs(steerInput);
+        steerInput = THREE.MathUtils.clamp(steerInput + auto * input.steerAssist * (1 - manual * 0.6), -1, 1);
+      }
     } else {
       const ai = this.computeAIControls(dt, leaderProgress);
       throttle = ai.throttle;
@@ -138,6 +147,11 @@ export class Racer {
       driftHeld = ai.drift;
       nitroHeld = ai.nitro;
     }
+    // Last applied controls (recorded into race telemetry / replays)
+    this.ctrl.steer = steerInput;
+    this.ctrl.throttle = throttle;
+    this.ctrl.brake = brake;
+    this.ctrl.nitro = nitroHeld ? 1 : 0;
 
     const proj = this.track.project(this.pos, this.u);
     this.onRoad = proj.onRoad;
@@ -362,6 +376,16 @@ export class Racer {
     const nitro = !this.finished && f.curvature < 0.14 && this.boostFuel > 55 && Math.random() < 0.04;
 
     return { throttle, brake, steer, drift, nitro };
+  }
+
+  /** Steering that follows the track centre-line ahead (used by the steering assist). */
+  trackSteer() {
+    const f = this.track.getFrameAt((this.u + 0.035) % 1);
+    const desiredHeading = Math.atan2(f.point.x - this.pos.x, f.point.z - this.pos.z);
+    let diff = desiredHeading - this.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    return THREE.MathUtils.clamp(diff * 1.8, -1, 1);
   }
 
   syncVisual(dt, braking = false) {
