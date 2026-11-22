@@ -672,6 +672,15 @@ export class GameEngine {
         this.ui.pedalFill.style.bottom = pv >= 0 ? '50%' : `${50 - pct}%`;
         this.ui.pedalFill.classList.toggle('brake', pv < 0);
       }
+      if (this.ui.tiltReadout) {
+        // Live sensor readout so tilt problems are visible on the phone itself
+        const d = this.motion.getDiagnostics();
+        this.ui.tiltReadout.textContent =
+          d.samples === 0
+            ? 'NO SENSOR DATA'
+            : `TILT ${d.pitch >= 0 ? '+' : ''}${d.pitch.toFixed(0)}° ${d.pitch > 3 ? 'GAS' : d.pitch < -3 ? 'BRAKE' : 'COAST'}`;
+        this.ui.tiltReadout.style.color = d.samples === 0 ? '#f87171' : d.pitch > 3 ? '#4ade80' : d.pitch < -3 ? '#f87171' : '';
+      }
     }
 
     this.drawMinimap();

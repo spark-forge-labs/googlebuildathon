@@ -36,6 +36,7 @@ const ui = {
   btnMotionHud: document.getElementById('btn-motion-hud'),
   motionStatusText: document.getElementById('motion-status-text'),
   pedalFill: document.getElementById('pedal-fill'),
+  tiltReadout: document.getElementById('tilt-readout'),
   gyroWheelHud: document.getElementById('gyro-wheel-hud'),
   gyroWheelSvg: document.getElementById('gyro-wheel-svg'),
   touchSteerArrows: document.getElementById('touch-steer-arrows'),
