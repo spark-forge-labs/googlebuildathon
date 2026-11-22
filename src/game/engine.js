@@ -10,6 +10,7 @@ import { MotionSteeringController } from './motionControls.js';
 import { buildRealSky, loadHdriEnvironment, loadTreeLibrary, ensureTreeVariants } from './realWorld.js';
 import { preloadCarModel } from './carModels.js';
 import { Q } from './quality.js';
+import { submitScore, fetchTop10, renderLeaderboard, formatMs, sanitizeName, leaderboardOnline } from './leaderboard.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
@@ -107,6 +108,12 @@ export class GameEngine {
       onStatusChange: (status, message) => this.onMotionStatus(status, message),
     });
 
+    this.playerName = '';
+    try {
+      this.playerName = sanitizeName(localStorage.getItem('hydrace-player') || '');
+    } catch (e) {
+      /* storage unavailable */
+    }
     this.selectedCityId = CITIES[0].id;
     this.selectedCarId = CAR_CATALOG[0].id;
     this.currentCity = CITIES[0];
@@ -291,7 +298,7 @@ export class GameEngine {
 
     const entries = [
       ...aiEntries.slice(0, 4),
-      { isPlayer: true, name: `YOU (${playerSpec.name})`, spec: playerSpec, id: 'player' },
+      { isPlayer: true, name: this.playerLabel(), spec: playerSpec, id: 'player' },
       aiEntries[4],
     ];
 
@@ -317,6 +324,53 @@ export class GameEngine {
       this.racers.push(racer);
       if (entry.isPlayer) this.player = racer;
     });
+  }
+
+  setPlayerName(name) {
+    this.playerName = sanitizeName(name);
+    try {
+      localStorage.setItem('hydrace-player', this.playerName);
+    } catch (e) {
+      /* storage unavailable */
+    }
+    if (this.player && this.state === 'MENU') this.player.name = this.playerLabel();
+  }
+
+  playerLabel() {
+    const spec = CAR_CATALOG.find((c) => c.id === this.selectedCarId) || CAR_CATALOG[0];
+    return `${this.playerName || 'YOU'} (${spec.name})`;
+  }
+
+  /** Saves the finished race to the BeyondGravity top 10 and shows the city's board. */
+  async recordLeaderboard(rank) {
+    const city = this.currentCity;
+    const p = this.player;
+    const totalMs = Math.round(p.finishTime * 1000);
+    const name = this.playerName || 'Player';
+    const spec = CAR_CATALOG.find((c) => c.id === this.selectedCarId) || CAR_CATALOG[0];
+    const ui = this.ui;
+    if (!ui.finishLbList) return;
+    ui.finishLbTitle.textContent = `TOP 10 • ${city.name.toUpperCase()}`;
+    ui.finishLbList.innerHTML = '<div class="lb-empty">Saving your time…</div>';
+    ui.finishLbStatus.textContent = '';
+    const raceId = (this.raceCounter = (this.raceCounter || 0) + 1);
+    const where = await submitScore({
+      name,
+      city: city.id,
+      totalMs,
+      bestLapMs: Number.isFinite(p.bestLapTime) ? p.bestLapTime * 1000 : null,
+      car: spec.name,
+      position: rank,
+    });
+    const { rows, source } = await fetchTop10(city.id);
+    if (raceId !== this.raceCounter) return; // a new race started meanwhile
+    const inTop = renderLeaderboard(ui.finishLbList, rows, { name, totalMs });
+    const mine = inTop ? 'You made the top 10!' : `Your time ${formatMs(totalMs)} is not in the top 10 yet.`;
+    let where2;
+    if (source === 'online' && where === 'online') where2 = 'Saved to the BeyondGravity leaderboard.';
+    else if (leaderboardOnline) where2 = 'Could not reach BeyondGravity: saved on this device.';
+    else where2 = 'Saved on this device.';
+    ui.finishLbStatus.textContent = `${mine} ${where2}`;
   }
 
   selectCity(cityId) {
@@ -553,6 +607,7 @@ export class GameEngine {
 
     this.ui.finishOverlay.classList.remove('hidden');
     this.ui.speedLines.classList.add('hidden');
+    this.recordLeaderboard(playerRank);
     this.sound.playFanfare();
     this.particles.emitConfetti(this.player.pos, 65);
   }
