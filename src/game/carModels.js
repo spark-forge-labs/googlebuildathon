@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
+import { Q } from './quality.js';
 
 /**
  * Real car model: Ferrari 458 Italia by vicent091036 (CC-BY 4.0),
@@ -10,7 +12,9 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 const BASE = import.meta.env.BASE_URL || '/';
 const TARGET_LENGTH = 4.9; // game units (procedural cars are ~5)
 
-let template = null;
+let template = null; // full detail
+let templateMid = null; // ~40% triangles
+let templateLow = null; // ~15% triangles
 let aoTexture = null;
 let loading = null;
 
@@ -23,6 +27,50 @@ const INTERIOR = new Set([
   'trim',
   'steering_wheel',
 ]);
+
+/** Returns a copy of the model with every heavy mesh simplified to `ratio` of its triangles. */
+function simplifiedCopy(model, ratio) {
+  const copy = model.clone(true);
+  copy.traverse((o) => {
+    if (!o.isMesh || !o.geometry.index) return;
+    const g = o.geometry;
+    const triCount = g.index.count / 3;
+    if (triCount < 600) return;
+    const posAttr = g.attributes.position;
+    let positions = posAttr.array;
+    if (!(positions instanceof Float32Array) || posAttr.isInterleavedBufferAttribute) {
+      positions = new Float32Array(posAttr.count * 3);
+      for (let i = 0; i < posAttr.count; i++) {
+        positions[i * 3] = posAttr.getX(i);
+        positions[i * 3 + 1] = posAttr.getY(i);
+        positions[i * 3 + 2] = posAttr.getZ(i);
+      }
+    }
+    const indices = new Uint32Array(g.index.array);
+    const target = Math.max(3, Math.floor((indices.length * ratio) / 3) * 3);
+    let simplified;
+    const nAttr = g.attributes.normal;
+    if (nAttr) {
+      // Weight normals so creases and panel shading survive the simplification
+      const normals = new Float32Array(nAttr.count * 3);
+      for (let i = 0; i < nAttr.count; i++) {
+        normals[i * 3] = nAttr.getX(i);
+        normals[i * 3 + 1] = nAttr.getY(i);
+        normals[i * 3 + 2] = nAttr.getZ(i);
+      }
+      [simplified] = MeshoptSimplifier.simplifyWithAttributes(
+        indices, positions, 3, normals, 3, [0.6, 0.6, 0.6], null, target, 0.02, ['Permissive']
+      );
+    } else {
+      [simplified] = MeshoptSimplifier.simplify(indices, positions, 3, target, 0.02, ['Permissive']);
+    }
+    if (simplified.length >= indices.length) return;
+    const ng = g.clone();
+    ng.setIndex(new THREE.BufferAttribute(simplified, 1));
+    o.geometry = ng;
+  });
+  return copy;
+}
 
 export function isCarModelReady() {
   return template !== null;
@@ -83,7 +131,14 @@ export function preloadCarModel() {
         });
 
         template = model;
-        resolve(template);
+        // Lighter copies for rival cars and phones (meshoptimizer simplification)
+        MeshoptSimplifier.ready
+          .then(() => {
+            templateMid = simplifiedCopy(model, 0.45);
+            templateLow = simplifiedCopy(model, 0.2);
+          })
+          .catch((e) => console.warn('Car simplification unavailable, using full detail', e))
+          .finally(() => resolve(template));
       },
       undefined,
       (err) => {
@@ -111,7 +166,11 @@ export function buildRealCar({ bodyColor, isPlayer = false, lite = false }) {
   holder.scale.setScalar(s);
   bodyGroup.add(holder);
 
-  const car = template.clone(true);
+  // Detail level: desktop player = full; desktop rivals & phone player = mid; phone rivals = low
+  let src = template;
+  if (Q.tier === 'low') src = isPlayer ? templateMid || template : templateLow || template;
+  else if (!isPlayer) src = templateMid || template;
+  const car = src.clone(true);
   holder.add(car);
 
   // Factory-style paint: metallic flake + glossy clearcoat

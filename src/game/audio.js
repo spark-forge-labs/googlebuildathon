@@ -5,6 +5,8 @@
  *  - Filtered tire screech when drifting
  *  - Nitro afterburner chirp, collision thud, countdown beeps, and victory fanfare
  */
+import { RaceMusic } from './music.js';
+
 export class SoundEngine {
   constructor() {
     this.ctx = null;
@@ -19,6 +21,13 @@ export class SoundEngine {
     this.engineGain = null;
     this.driftGain = null;
     this.windGain = null;
+    this.music = null;
+    this.musicEnabled = true;
+    try {
+      this.musicEnabled = localStorage.getItem('hydrace-music') !== 'off';
+    } catch (e) {
+      /* storage unavailable */
+    }
   }
 
   init() {
@@ -102,7 +111,38 @@ export class SoundEngine {
     this.windGain.connect(this.master);
     noise2.start();
 
+    // Background soundtrack on its own bus (independent of the SFX toggle)
+    try {
+      this.music = new RaceMusic(this.ctx, this.ctx.destination);
+      this.music.setEnabled(this.musicEnabled);
+      this.music.start();
+    } catch (e) {
+      console.warn('Music unavailable', e);
+      this.music = null;
+    }
+
     this.initialized = true;
+  }
+
+  setMusicIntensity(level) {
+    if (this.music) this.music.setIntensity(level);
+  }
+
+  setMusicEnabled(on) {
+    this.musicEnabled = on;
+    try {
+      localStorage.setItem('hydrace-music', on ? 'on' : 'off');
+    } catch (e) {
+      /* storage unavailable */
+    }
+    if (this.music) this.music.setEnabled(on);
+  }
+
+  /** Pause audio while the tab is hidden so the music scheduler can't stutter. */
+  setSuspended(hidden) {
+    if (!this.ctx) return;
+    if (hidden && this.ctx.state === 'running') this.ctx.suspend();
+    else if (!hidden && this.ctx.state === 'suspended') this.ctx.resume();
   }
 
   setEnabled(on) {

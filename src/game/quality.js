@@ -18,7 +18,7 @@ export const Q =
         tier: 'low',
         pixelRatio: Math.min(typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1, 1.5),
         shadowMapSize: 2048,
-        heroTrees: 34,
+        heroTrees: 26,
         impostorTrees: 260,
         buildings: 170,
         treeShadows: false,

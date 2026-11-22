@@ -1041,9 +1041,9 @@ function buildCrowdStands(group, track) {
   // Stadium seats + seated spectators (capsule torsos, varied skin and clothing)
   const seatGeo = new THREE.BoxGeometry(0.5, 0.42, 0.45);
   const seatMat = new THREE.MeshStandardMaterial({ color: 0x1f4e8c, roughness: 0.55 });
-  const torso = new THREE.CapsuleGeometry(0.2, 0.42, 4, 8);
+  const torso = new THREE.CapsuleGeometry(0.2, 0.42, 2, 6);
   const clothMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
-  const head = new THREE.SphereGeometry(0.15, 10, 8);
+  const head = new THREE.SphereGeometry(0.15, 7, 5);
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 });
   const MAXP = 6 * 66;
   const seats = new THREE.InstancedMesh(seatGeo, seatMat, MAXP);

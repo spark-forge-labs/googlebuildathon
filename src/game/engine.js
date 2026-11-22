@@ -343,6 +343,9 @@ export class GameEngine {
     if (this.ui.motionStatusText) {
       this.ui.motionStatusText.textContent = message;
     }
+    if (status === 'insecure' || status === 'denied' || status === 'unavailable' || status === 'waiting') {
+      this.showToast(message, 6500);
+    }
     this.updateMotionButtonsUI();
   }
 
@@ -390,6 +393,7 @@ export class GameEngine {
 
   backToMenu() {
     this.state = 'MENU';
+    this.sound.setMusicIntensity('menu');
     if (this.pendingHdRebuild) {
       this.pendingHdRebuild = false;
       this.loadCityWorld(this.selectedCityId);
@@ -406,6 +410,54 @@ export class GameEngine {
   cycleCamera() {
     this.camModeIdx = (this.camModeIdx + 1) % CAMERA_MODES.length;
     this.ui.btnCamera.textContent = `CAM: ${CAMERA_MODES[this.camModeIdx]}`;
+  }
+
+  toggleMusic() {
+    this.sound.init();
+    const next = !this.sound.musicEnabled;
+    this.sound.setMusicEnabled(next);
+    if (this.ui.btnMusic) this.ui.btnMusic.textContent = `MUSIC: ${next ? 'ON' : 'OFF'}`;
+  }
+
+  /** Small transient message over the game (motion sensor problems etc.). */
+  showToast(message, ms = 5000) {
+    if (!this.toastEl) {
+      this.toastEl = document.createElement('div');
+      this.toastEl.style.cssText =
+        'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:60;max-width:88vw;padding:8px 14px;border-radius:10px;' +
+        'background:rgba(127,29,29,.92);color:#fff;font:700 12px/1.35 system-ui,sans-serif;text-align:center;pointer-events:none;' +
+        'box-shadow:0 6px 20px rgba(0,0,0,.35);transition:opacity .3s';
+      document.body.appendChild(this.toastEl);
+    }
+    this.toastEl.textContent = message;
+    this.toastEl.style.opacity = '1';
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => (this.toastEl.style.opacity = '0'), ms);
+  }
+
+  /** Coaching hint for tilt controls: shown at the start and whenever the car sits still. */
+  updateTiltCoach(dt) {
+    if (!this.coachEl) {
+      this.coachEl = document.createElement('div');
+      this.coachEl.innerHTML =
+        '<div style="font-size:15px;letter-spacing:.06em">TILT PHONE <b style="color:#4ade80">AWAY ▲</b> TO ACCELERATE</div>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:3px">tilt back ▼ to brake • turn like a wheel to steer</div>';
+      this.coachEl.style.cssText =
+        'position:fixed;left:50%;top:38%;transform:translate(-50%,-50%);z-index:55;padding:10px 18px;border-radius:12px;' +
+        'background:rgba(10,14,24,.78);color:#fff;font:800 13px/1.2 system-ui,sans-serif;text-align:center;pointer-events:none;' +
+        'border:1px solid rgba(74,222,128,.5);opacity:0;transition:opacity .25s';
+      document.body.appendChild(this.coachEl);
+    }
+    let show = false;
+    if (this.motion.enabled && this.player) {
+      if (this.state === 'COUNTDOWN') show = true;
+      else if (this.state === 'RACING') {
+        const idle = Math.abs(this.player.speed) < 4 && this.motion.throttleValue < 0.05;
+        this.coachIdle = idle ? (this.coachIdle || 0) + dt : 0;
+        show = this.raceTime < 3 || this.coachIdle > 2;
+      }
+    }
+    this.coachEl.style.opacity = show ? '1' : '0';
   }
 
   toggleAudio() {
@@ -454,6 +506,7 @@ export class GameEngine {
         this.deskWorld.setGantrySignal('red3');
         this.sound.playBeep(false);
       } else if (beat === 0) {
+        this.sound.setMusicIntensity('race'); // the beat drops on GO
         this.ui.countdownText.textContent = 'GO!';
         this.deskWorld.setGantrySignal('green');
         this.sound.playBeep(true);
@@ -542,12 +595,18 @@ export class GameEngine {
       desiredLook.set(p.pos.x + fwdX * 11 + rightX * lookPan, p.pos.y + 1.85, p.pos.z + fwdZ * 11 + rightZ * lookPan);
       targetFov = p.isBoosting ? 77 : 62 + Math.min(10, (Math.abs(p.speed) / 56) * 10);
     } else if (mode === 'HOOD') {
-      desiredPos.set(p.pos.x + fwdX * 0.9, p.pos.y + 2.02, p.pos.z + fwdZ * 0.9);
+      // Real car model is longer/lower than the built-in cars: sit over the bonnet, ahead of the windscreen
+      const hoodFwd = p.rig.isRealModel ? 1.25 : 0.9;
+      const hoodUp = p.rig.isRealModel ? 1.22 : 2.02;
+      desiredPos.set(p.pos.x + fwdX * hoodFwd, p.pos.y + hoodUp, p.pos.z + fwdZ * hoodFwd);
       desiredLook.set(p.pos.x + fwdX * 28 + rightX * lookPan * 1.4, p.pos.y + 1.5, p.pos.z + fwdZ * 28 + rightZ * lookPan * 1.4);
       targetFov = p.isBoosting ? 84 : 70 + Math.min(8, (Math.abs(p.speed) / 56) * 8);
     } else if (mode === 'BUMPER') {
       // Raw tarmac-skimming real-time road sensation!
-      desiredPos.set(p.pos.x + fwdX * 2.4, p.pos.y + 1.12, p.pos.z + fwdZ * 2.4);
+      // Keep the camera in front of the nose (real model nose is at ~2.45 units)
+      const bumperFwd = p.rig.isRealModel ? 2.85 : 2.4;
+      const bumperUp = p.rig.isRealModel ? 0.7 : 1.12;
+      desiredPos.set(p.pos.x + fwdX * bumperFwd, p.pos.y + bumperUp, p.pos.z + fwdZ * bumperFwd);
       desiredLook.set(p.pos.x + fwdX * 32 + rightX * lookPan * 1.5, p.pos.y + 1.1, p.pos.z + fwdZ * 32 + rightZ * lookPan * 1.5);
       targetFov = p.isBoosting ? 88 : 74 + Math.min(9, (Math.abs(p.speed) / 56) * 9);
     } else {
@@ -557,7 +616,12 @@ export class GameEngine {
     }
 
     const smooth = mode === 'HOOD' || mode === 'BUMPER' ? 22 : 8.2;
-    this.camPos.lerp(desiredPos, Math.min(1, smooth * dt));
+    if (mode === 'HOOD' || mode === 'BUMPER') {
+      // Onboard cameras are bolted to the car: no positional lag, or they end up inside the body at speed
+      this.camPos.copy(desiredPos);
+    } else {
+      this.camPos.lerp(desiredPos, Math.min(1, smooth * dt));
+    }
     this.camLook.lerp(desiredLook, Math.min(1, (smooth + 2.5) * dt));
 
     // Visceral speed vibration & collision camera shake
@@ -712,6 +776,7 @@ export class GameEngine {
     }
 
     this.particles.update(dt);
+    this.updateTiltCoach(dt);
     this.updateCamera(dt);
     this.updateHUD();
 
