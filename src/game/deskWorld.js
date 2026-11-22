@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildCityBridge, buildCityLandmarks } from './cityLandmarks.js';
+import { buildRealWorld, updateTreeWind, weatherLandmarkMaterials } from './realWorld.js';
 
 export const DESK_HALF_W = 110;
 export const DESK_HALF_D = 75;
@@ -111,7 +112,7 @@ function createRulerTexture() {
   }
   ctx.fillStyle = '#5a3a18';
   ctx.font = 'bold 18px sans-serif';
-  ctx.fillText('INDIA DESK GP EDITION • 30 CM', 512, 108);
+  ctx.fillText('INDIA GP EDITION • 30 CM', 512, 108);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -200,7 +201,7 @@ function createLaptopScreenTexture(city) {
 
   ctx.fillStyle = '#18d6c4';
   ctx.font = 'bold 28px sans-serif';
-  ctx.fillText(`${city.nativeName} • DESK CIRCUIT`, 754, 210);
+  ctx.fillText(`${city.nativeName} • CIRCUIT`, 754, 210);
 
   ctx.strokeStyle = city.badgeColor;
   ctx.lineWidth = 5;
@@ -253,10 +254,9 @@ export class DeskWorld {
     this.waterMeshes = [];
     this.rotatingBeacons = [];
     this.gantryLights = [];
-    this.mugSteamOrigin = new THREE.Vector3(city.mugPos.x, 13.5, city.mugPos.z);
+    // Real-world mode: no desk, no mug steam
+    this.mugSteamOrigin = null;
 
-    this.buildDeskAndRoom();
-    this.buildDeskProps();
 
     const animTargets = {
       bridgeCables: this.bridgeCables,
@@ -267,19 +267,34 @@ export class DeskWorld {
     const cityColliders = buildCityLandmarks(city, this.group, animTargets);
     this.colliders.push(...cityColliders);
 
+    weatherLandmarkMaterials(this.group);
+
+    // Real-world surroundings, kept clear of landmarks and water
+    const avoid = this.colliders.map((c) => ({ x: c.x, z: c.z, r: c.radius + 2 }));
+    for (const w of this.waterMeshes) {
+      if (!w.geometry.boundingSphere) w.geometry.computeBoundingSphere();
+      avoid.push({ x: w.position.x, z: w.position.z, r: w.geometry.boundingSphere.radius * Math.max(w.scale.x, w.scale.z) + 3 });
+    }
+    const realAnim = buildRealWorld(this.group, city, track, avoid);
+    this.waterMeshes.push(...realAnim.water);
+
     this.buildStartGantryAndBillboards();
     this.buildStreetLampsAndTrees();
   }
 
   dispose() {
     this.scene.remove(this.group);
+    // Shared resources (tree variants, facades, ground textures) survive city switches
     this.group.traverse((obj) => {
-      if (obj.geometry) obj.geometry.dispose();
+      if (obj.geometry && !obj.geometry.userData.shared) obj.geometry.dispose();
+      if (obj.isInstancedMesh) obj.dispose();
       if (obj.material) {
         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
         mats.forEach((m) => {
-          if (m.map) m.map.dispose();
-          if (m.emissiveMap) m.emissiveMap.dispose();
+          if (m.userData.shared) return;
+          for (const k of ['map', 'emissiveMap', 'roughnessMap', 'normalMap', 'bumpMap']) {
+            if (m[k] && !m[k].userData.shared) m[k].dispose();
+          }
           m.dispose();
         });
       }
@@ -628,7 +643,7 @@ export class DeskWorld {
     }
 
     const bannerTex = createSignTexture(
-      `${this.city.name.toUpperCase()} DESK GP`,
+      `${this.city.name.toUpperCase()} GP`,
       `${this.city.nativeName} • START / FINISH`,
       '#0d1b33',
       this.city.badgeColor
@@ -690,54 +705,51 @@ export class DeskWorld {
   }
 
   buildStreetLampsAndTrees() {
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c3d28, roughness: 0.9 });
-    const neemMat = new THREE.MeshStandardMaterial({ color: 0x1e8449, roughness: 0.8 });
-    const gulmoharMat = new THREE.MeshStandardMaterial({ color: 0xe65100, roughness: 0.75 });
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.75 });
-    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffebb3 });
+    // Trees now come from EZ-Tree in realWorld.js. Real street lights: tapered
+    // galvanised pole, curved outreach arm and a flat LED luminaire head.
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x9ea3a8, roughness: 0.45, metalness: 0.85 });
+    const headMat = new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.5, metalness: 0.6 });
+    const lensMat = new THREE.MeshStandardMaterial({ color: 0xf4f1e6, roughness: 0.2, emissive: 0xfff3d6, emissiveIntensity: 0.15 });
+    const poleGeo = new THREE.CylinderGeometry(0.09, 0.17, 9.2, 10);
+    const baseGeo = new THREE.CylinderGeometry(0.28, 0.32, 0.6, 10);
+    const headGeo = new THREE.BoxGeometry(0.42, 0.14, 1.25);
+    const lensGeo = new THREE.BoxGeometry(0.34, 0.02, 1.0);
 
-    const treeSpots = [
-      { x: 24, z: 24, g: true },
-      { x: 27, z: -2, g: false },
-      { x: 58, z: -4, g: true },
-      { x: 56, z: 28, g: false },
-      { x: 18, z: 26, g: false },
-      { x: 15, z: -14, g: true },
-      { x: -24, z: 32, g: false },
-      { x: -30, z: 24, g: true },
-      { x: 92, z: -12, g: false },
-      { x: 88, z: 34, g: true },
-    ];
-    for (const t of treeSpots) {
-      const tree = new THREE.Group();
-      tree.position.set(t.x, 0, t.z);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, 3.4, 7), trunkMat);
-      trunk.position.y = 1.7;
-      trunk.castShadow = true;
-      tree.add(trunk);
-      const canopy = new THREE.Mesh(new THREE.DodecahedronGeometry(2.5, 1), t.g ? gulmoharMat : neemMat);
-      canopy.scale.set(1.2, 0.8, 1.2);
-      canopy.position.y = 4.2;
-      canopy.castShadow = true;
-      tree.add(canopy);
-      this.group.add(tree);
-    }
-
-    // Highway streetlamps along the outer rim of the track for real-time road depth!
-    for (let i = 0; i < 18; i++) {
-      const u = i / 18;
-      const f = this.track.getFrameAt(u);
+    for (let i = 0; i < 26; i++) {
+      const f = this.track.getFrameAt(i / 26);
       if (f.point.y > 1.2) continue;
-      const pos = f.point.clone().addScaledVector(f.right, 10.2);
+      const pos = f.point.clone().addScaledVector(f.right, 10.4);
       const lamp = new THREE.Group();
       lamp.position.set(pos.x, 0, pos.z);
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 7.6, 6), poleMat);
-      pole.position.y = 3.8;
+      // face the road
+      lamp.lookAt(f.point.x, 0, f.point.z);
+
+      const base = new THREE.Mesh(baseGeo, poleMat);
+      base.position.y = 0.3;
+      lamp.add(base);
+      const pole = new THREE.Mesh(poleGeo, poleMat);
+      pole.position.y = 4.6;
+      pole.castShadow = true;
       lamp.add(pole);
-      const armDir = f.right.clone().multiplyScalar(-1.6);
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 8), bulbMat);
-      bulb.position.set(armDir.x, 7.6, armDir.z);
-      lamp.add(bulb);
+
+      const armCurve = new THREE.QuadraticBezierCurve3(
+        new THREE.Vector3(0, 8.6, 0),
+        new THREE.Vector3(0, 9.6, 0.3),
+        new THREE.Vector3(0, 9.55, 2.2)
+      );
+      const arm = new THREE.Mesh(new THREE.TubeGeometry(armCurve, 12, 0.06, 6, false), poleMat);
+      arm.castShadow = true;
+      lamp.add(arm);
+
+      const head = new THREE.Mesh(headGeo, headMat);
+      head.position.set(0, 9.5, 2.6);
+      head.rotation.x = -0.08;
+      head.castShadow = true;
+      lamp.add(head);
+      const lens = new THREE.Mesh(lensGeo, lensMat);
+      lens.position.set(0, 9.42, 2.62);
+      lens.rotation.x = -0.08;
+      lamp.add(lens);
       this.group.add(lamp);
     }
   }
@@ -761,6 +773,7 @@ export class DeskWorld {
   }
 
   update(time, dt = 0.016) {
+    updateTreeWind(time);
     const colorA = new THREE.Color(this.city.accentHex);
     const colorB = new THREE.Color(this.city.secondaryHex);
     const colorC = new THREE.Color(0xf7c948);
@@ -770,12 +783,20 @@ export class DeskWorld {
       const wave = (Math.sin(time * 2.1 + c.phase * 1.4) + 1) * 0.5;
       if (wave < 0.5) tmp.lerpColors(colorA, colorB, wave * 2);
       else tmp.lerpColors(colorB, colorC, (wave - 0.5) * 2);
-      c.mesh.material.color.copy(tmp);
-      c.mesh.material.emissive.copy(tmp);
+      c.mesh.material.color.setHex(0xe5e7eb);
+      if (c.mesh.material.emissive) {
+        c.mesh.material.emissive.copy(tmp).multiplyScalar(0.12);
+      }
     }
 
     for (const w of this.waterMeshes) {
-      w.material.emissiveIntensity = 0.42 + 0.16 * Math.sin(time * 2.6);
+      const m = w.material;
+      if (m.normalMap) {
+        m.normalMap.offset.x = time * 0.012;
+        m.normalMap.offset.y = time * 0.008;
+      } else if (m.emissive) {
+        m.emissiveIntensity = 0.42 + 0.16 * Math.sin(time * 2.6);
+      }
     }
 
     // Rotate Marina & Pondicherry Lighthouse beams smoothly!

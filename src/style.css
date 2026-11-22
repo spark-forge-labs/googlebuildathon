@@ -231,6 +231,52 @@ body,
   transition: transform 0.04s linear;
 }
 
+.pedal-gauge {
+  position: absolute;
+  left: 82px;
+  top: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.pedal-track {
+  position: relative;
+  width: 10px;
+  height: 58px;
+  border-radius: 6px;
+  background: rgba(12, 18, 32, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+}
+.pedal-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 50%;
+  height: 0;
+  background: #22c55e;
+  transition: height 0.05s linear, bottom 0.05s linear;
+}
+.pedal-fill.brake {
+  background: #ef4444;
+}
+.pedal-mid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.6);
+}
+.pedal-tag {
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.pedal-tag.gas { color: #4ade80; }
+.pedal-tag.brk { color: #f87171; }
+
 .recenter-btn {
   background: rgba(12, 18, 32, 0.85);
   color: var(--gold);
@@ -432,11 +478,11 @@ body,
 
 .menu-panel {
   width: 100%;
-  max-width: 820px;
+  max-width: 940px;
   background: rgba(12, 18, 34, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 22px;
-  padding: 22px 26px;
+  padding: 22px 24px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
   text-align: center;
   max-height: 95vh;
@@ -489,11 +535,11 @@ body,
   margin-bottom: 8px;
 }
 
-/* 7-City Selector Grid */
+/* 9-City Selector Grid (3x3 or responsive auto-fit) */
 .city-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 7px;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 6px;
 }
 
 .city-chip {
@@ -839,9 +885,9 @@ body,
   background: rgba(255, 140, 43, 0.35);
 }
 
-@media (max-width: 780px) {
+@media (max-width: 860px) {
   .city-grid {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
   }
   .car-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -852,4 +898,12 @@ body,
   .hud-top-center {
     display: none;
   }
+}
+
+.menu-credits {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.38);
 }

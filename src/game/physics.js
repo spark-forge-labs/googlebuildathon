@@ -122,9 +122,12 @@ export class Racer {
       steerInput = Math.abs(keySteer) > 0.05 ? keySteer : (input.analogSteer || 0);
       steerInput = THREE.MathUtils.clamp(steerInput, -1, 1);
 
-      const autoGas = Boolean(input.motionAutoGas && !input.down);
-      throttle = input.up || autoGas ? 1 : 0;
-      brake = input.down ? 1 : 0;
+      // Buttons/keys win; otherwise the phone's forward/back tilt is an analog pedal
+      const tiltGas = input.analogThrottle || 0;
+      const tiltBrake = input.analogBrake || 0;
+      throttle = input.up ? 1 : input.down ? 0 : tiltGas;
+      brake = input.down ? 1 : input.up ? 0 : tiltBrake;
+      this.analogPedal = !input.up && !input.down && (tiltGas > 0 || tiltBrake > 0);
       driftHeld = input.drift;
       nitroHeld = input.boost;
     } else {
@@ -164,7 +167,9 @@ export class Racer {
 
     const offRoadFactor = this.onRoad ? 1.0 : 0.72;
     const nitroMult = this.isBoosting ? 1.33 : 1.0;
-    const effectiveMax = this.maxSpeed * offRoadFactor * nitroMult;
+    // Partial pedal = partial top speed, like a real accelerator
+    const pedalCap = this.isPlayer && this.analogPedal && throttle > 0 ? 0.4 + 0.6 * throttle : 1;
+    const effectiveMax = this.maxSpeed * offRoadFactor * nitroMult * pedalCap;
 
     if (throttle > 0) {
       const accelBoost = this.isBoosting ? 1.6 : 1.0;
@@ -379,7 +384,7 @@ export class Racer {
     }
 
     const wheelSpin = this.speed * dt * 2.2;
-    for (const w of wheelMeshes) w.rotation.x += wheelSpin;
+    for (const w of wheelMeshes) w.rotation.x += wheelSpin * (w.userData.spinSign || 1);
     for (const pivot of frontWheelPivots) pivot.rotation.y = this.steerAngle;
 
     if (tailLightMat) tailLightMat.emissiveIntensity = braking ? 2.8 : 0.9;

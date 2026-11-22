@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { makeRealWaterMaterial, facadeTextures } from './realWorld.js';
 
 /**
  * Modular 3D Iconic Towers, Monuments & Signature Bridges for all 7 Indian cities.
@@ -29,13 +30,7 @@ function addWaterBasin(group, waterMeshes, x, z, radius, colorHex = 0x0d9488, em
 
   const water = new THREE.Mesh(
     new THREE.CylinderGeometry(radius, radius, 0.32, 36),
-    new THREE.MeshStandardMaterial({
-      color: colorHex,
-      emissive: emissiveHex,
-      emissiveIntensity: 0.45,
-      roughness: 0.12,
-      metalness: 0.42,
-    })
+    makeRealWaterMaterial(colorHex)
   );
   water.position.set(x, 0.2, z);
   water.receiveShadow = true;
@@ -44,12 +39,16 @@ function addWaterBasin(group, waterMeshes, x, z, radius, colorHex = 0x0d9488, em
 }
 
 function addTowerSkyscraper(parent, { x, z, w, h, d, color = 0x0f2b5c, accent = 0x38bdf8, spire = false }) {
+  const tex = facadeTextures().glass.clone();
+  tex.userData = {};
+  tex.needsUpdate = true;
+  tex.repeat.set(Math.max(0.5, w / 14), Math.max(0.5, h / 14));
   const mat = new THREE.MeshStandardMaterial({
-    color,
-    emissive: new THREE.Color(color).multiplyScalar(0.35),
-    emissiveIntensity: 0.55,
-    roughness: 0.18,
-    metalness: 0.78,
+    map: tex,
+    color: new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.65),
+    roughness: 0.12,
+    metalness: 0.65,
+    envMapIntensity: 1.3,
   });
   const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   body.position.set(x, h / 2, z);
@@ -57,13 +56,8 @@ function addTowerSkyscraper(parent, { x, z, w, h, d, color = 0x0f2b5c, accent = 
   body.receiveShadow = true;
   parent.add(body);
 
-  // Horizontal illuminated glass window bands
-  const bandMat = new THREE.MeshBasicMaterial({ color: accent });
-  for (let y = 3.2; y < h - 1; y += 3.4) {
-    const band = new THREE.Mesh(new THREE.BoxGeometry(w + 0.22, 0.28, d + 0.22), bandMat);
-    band.position.set(x, y, z);
-    parent.add(band);
-  }
+  // Steel crown trim (real towers, no neon bands)
+  const bandMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.8, roughness: 0.3 });
 
   const crown = new THREE.Mesh(new THREE.BoxGeometry(w + 0.35, 0.55, d + 0.35), bandMat);
   crown.position.set(x, h + 0.25, z);
@@ -315,6 +309,85 @@ export function buildCityBridge(city, track, group, animTargets) {
       portal.add(neon);
       bridgeGroup.add(portal);
     }
+  } else if (city.bridgeStyle === 'prakasam-barrage') {
+    // Iconic Vijayawada Prakasam Barrage over the Krishna River:
+    // grand white-and-gold arched sluice portals & glowing crown lamps!
+    const barrageWhite = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.35 });
+    const barrageGold = new THREE.MeshStandardMaterial({ color: 0xfbbf24, roughness: 0.3, metalness: 0.6 });
+    const glowBulb = new THREE.MeshBasicMaterial({ color: 0xffe49c });
+
+    for (const pu of city.bridgeUs) {
+      const f = track.getFrameAt(pu);
+      const portal = new THREE.Group();
+      portal.position.set(f.point.x, 0, f.point.z);
+      portal.quaternion.copy(rightHandedRoadQuaternion(f.tangent));
+
+      for (const side of [-1, 1]) {
+        const pier = new THREE.Mesh(new THREE.BoxGeometry(1.8, f.point.y + 10.5, 2.6), barrageWhite);
+        pier.position.set(side * 8.6, (f.point.y + 10.5) * 0.5, 0);
+        pier.castShadow = true;
+        portal.add(pier);
+
+        const cap = new THREE.Mesh(new THREE.ConeGeometry(1.4, 2.4, 4), barrageGold);
+        cap.rotation.y = Math.PI / 4;
+        cap.position.set(side * 8.6, f.point.y + 11.7, 0);
+        portal.add(cap);
+
+        const orb = new THREE.Mesh(new THREE.SphereGeometry(0.55, 8, 8), glowBulb);
+        orb.position.set(side * 8.6, f.point.y + 13.2, 0);
+        portal.add(orb);
+      }
+
+      const archBeam = new THREE.Mesh(new THREE.BoxGeometry(18.2, 1.35, 1.8), barrageWhite);
+      archBeam.position.set(0, f.point.y + 9.2, 0);
+      portal.add(archBeam);
+      const goldTrim = new THREE.Mesh(new THREE.BoxGeometry(18.5, 0.35, 2.0), barrageGold);
+      goldTrim.position.set(0, f.point.y + 10.0, 0);
+      portal.add(goldTrim);
+      bridgeGroup.add(portal);
+    }
+  } else if (city.bridgeStyle === 'vizag-coastal') {
+    // Sleek Vizag Bay-of-Bengal Coastal Cable-Arch Skybridge!
+    const cyanSteel = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.28, metalness: 0.55 });
+    for (const pu of city.bridgeUs) {
+      const f = track.getFrameAt(pu);
+      const tower = new THREE.Group();
+      tower.position.set(f.point.x, 0, f.point.z);
+      tower.quaternion.copy(rightHandedRoadQuaternion(f.tangent));
+
+      // Sweeping ocean-wave arch straddling the deck
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(9.6, 0.72, 10, 28, Math.PI), cyanSteel);
+      arch.position.set(0, f.point.y + 5.2, 0);
+      arch.castShadow = true;
+      tower.add(arch);
+
+      for (const side of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.05, f.point.y + 5.5, 10), cyanSteel);
+        leg.position.set(side * 9.5, (f.point.y + 5.5) * 0.5, 0);
+        tower.add(leg);
+      }
+      bridgeGroup.add(tower);
+
+      const apexWorld = new THREE.Vector3(f.point.x, f.point.y + 14.8, f.point.z);
+      for (const du of [-0.032, -0.018, 0.018, 0.032]) {
+        const af = track.getFrameAt(pu + du);
+        for (const side of [-1, 1]) {
+          const anchor = af.point.clone().addScaledVector(af.right, side * 8.1);
+          anchor.y += 0.4;
+          const dir = new THREE.Vector3().subVectors(anchor, apexWorld);
+          const cableMat = new THREE.MeshStandardMaterial({
+            color: 0x38bdf8,
+            emissive: 0x0ea5e9,
+            emissiveIntensity: 1.15,
+          });
+          const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, dir.length(), 6), cableMat);
+          cable.position.copy(apexWorld).addScaledVector(dir, 0.5);
+          cable.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+          bridgeGroup.add(cable);
+          bridgeCables.push({ mesh: cable, phase: pu * 18 + du * 42 + side });
+        }
+      }
+    }
   } else {
     // Pondicherry Promenade Coastal Pier Bridge with warm Riviera lanterns!
     const lampGlow = new THREE.MeshBasicMaterial({ color: 0xfde68a });
@@ -414,6 +487,26 @@ export function buildCityLandmarks(city, group, animTargets) {
     addCol(-5, 11, 17);
     // Sacred Heart Basilica Twin Spires + Mustard-Yellow French Quarter Villas
     buildFrenchQuarterBasilica(group, 78, -52);
+    addCol(78, -52, 16);
+  } else if (city.id === 'vijayawada') {
+    // Indrakeeladri Hill crowned with the Golden Kanaka Durga Temple Gopuram!
+    buildKanakaDurgaHill(group, 44, 12);
+    addCol(44, 12, 14.5);
+    // Swaraj Maidan — Iconic 125ft Dr. B.R. Ambedkar Smriti Vanam Statue & Reflecting Pool!
+    buildAmbedkarSmritiVanam(group, waterMeshes, -5, 11);
+    addCol(-5, 11, 17);
+    // Benz Circle Gateway & Amaravati / MG Road Modern Glass Towers
+    buildVijayawadaSkyline(group, 78, -52);
+    addCol(78, -52, 16);
+  } else if (city.id === 'vizag') {
+    // Kailasagiri Lush Coastal Hilltop & Iconic Giant White Shiva-Parvati Monument!
+    buildKailasagiriHill(group, 44, 12);
+    addCol(44, 12, 14.5);
+    // RK Beach Bay + INS Kurusura Submarine Museum + Dolphin's Nose Lighthouse Beacon!
+    buildVizagBeachSubmarineLighthouse(group, waterMeshes, rotatingBeacons, -5, 11);
+    addCol(-5, 11, 17.5);
+    // Rushikonda IT SEZ Glass Skyline & Visakhapatnam Port Cranes
+    buildVizagPortSkyline(group, 78, -52);
     addCol(78, -52, 16);
   }
 
@@ -1268,3 +1361,249 @@ function buildFrenchQuarterBasilica(group, x, z) {
 
   group.add(g);
 }
+
+/* ==================== VIJAYAWADA ==================== */
+function buildKanakaDurgaHill(group, x, z) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z);
+
+  // Terraced rocky Indrakeeladri Hill
+  const rockMat = new THREE.MeshStandardMaterial({ color: 0x5c4f44, roughness: 0.9 });
+  const greenMat = new THREE.MeshStandardMaterial({ color: 0x166534, roughness: 0.88 });
+  const hillBase = new THREE.Mesh(new THREE.CylinderGeometry(11.5, 17.5, 7.5, 12), rockMat);
+  hillBase.position.y = 3.75;
+  hillBase.castShadow = true;
+  hillBase.receiveShadow = true;
+  g.add(hillBase);
+
+  const hillMid = new THREE.Mesh(new THREE.CylinderGeometry(7.8, 11.2, 4.6, 12), greenMat);
+  hillMid.position.y = 9.5;
+  hillMid.castShadow = true;
+  g.add(hillMid);
+
+  // Gleaming Golden Kanaka Durga Temple Vimana & Gopuram atop the hill!
+  const goldMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
+    emissive: 0xb45309,
+    emissiveIntensity: 0.42,
+    roughness: 0.22,
+    metalness: 0.85,
+  });
+  const sanctum = new THREE.Mesh(new THREE.BoxGeometry(8.5, 4.2, 8.5), new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.5 }));
+  sanctum.position.y = 13.6;
+  g.add(sanctum);
+
+  for (let i = 0; i < 4; i++) {
+    const w = 7.4 - i * 1.4;
+    const tier = new THREE.Mesh(new THREE.BoxGeometry(w, 1.9, w), goldMat);
+    tier.position.y = 16.5 + i * 1.9;
+    tier.castShadow = true;
+    g.add(tier);
+  }
+  const kalasam = new THREE.Mesh(new THREE.ConeGeometry(0.85, 3.2, 10), goldMat);
+  kalasam.position.y = 25.0;
+  g.add(kalasam);
+
+  const light = new THREE.PointLight(0xffc145, 52, 48, 1.4);
+  light.position.set(0, 22, 6);
+  g.add(light);
+  group.add(g);
+}
+
+function buildAmbedkarSmritiVanam(group, waterMeshes, x, z) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z);
+  addWaterBasin(g, waterMeshes, 0, 0, 16.5, 0x0284c7, 0x0c4a6e, 0xe2e8f0);
+
+  // Circular Kalachakra marble pedestal (Smriti Vanam Swaraj Maidan)
+  const marble = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.35 });
+  const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(5.8, 6.8, 5.2, 20), marble);
+  pedestal.position.y = 2.8;
+  pedestal.castShadow = true;
+  g.add(pedestal);
+
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(6.1, 0.38, 8, 24),
+    new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.9 })
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 5.4;
+  g.add(ring);
+
+  // Towering 125ft Bronze Dr. B.R. Ambedkar Monument Silhouette
+  const bronze = new THREE.MeshStandardMaterial({ color: 0x92623a, roughness: 0.32, metalness: 0.78 });
+  const coat = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.3, 11.5, 14), bronze);
+  coat.position.y = 11.2;
+  coat.castShadow = true;
+  g.add(coat);
+
+  const shoulders = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.2, 2.0), bronze);
+  shoulders.position.y = 16.5;
+  g.add(shoulders);
+
+  // Raised iconic pointing arm
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 5.2, 8), bronze);
+  arm.position.set(2.4, 19.2, 0.6);
+  arm.rotation.z = -0.35;
+  g.add(arm);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(1.3, 14, 14), bronze);
+  head.position.y = 18.8;
+  g.add(head);
+
+  const light = new THREE.PointLight(0x38bdf8, 42, 42, 1.4);
+  light.position.set(0, 14, 6);
+  g.add(light);
+  group.add(g);
+}
+
+function buildVijayawadaSkyline(group, x, z) {
+  const sky = new THREE.Group();
+  sky.position.set(x, 0, z);
+  sky.rotation.y = -0.5;
+  addTowerSkyscraper(sky, { x: 0, z: 0, w: 9.5, h: 31, d: 9, color: 0x1e3a5f, accent: 0xfb923c, spire: true });
+  addTowerSkyscraper(sky, { x: 15, z: -6, w: 8.5, h: 25, d: 8, color: 0x0c4a6e, accent: 0x38bdf8, spire: true });
+  addTowerSkyscraper(sky, { x: -15, z: -7, w: 9, h: 22, d: 8.5, color: 0x334155, accent: 0xfacc15 });
+  group.add(sky);
+}
+
+/* ==================== VIZAG (VISAKHAPATNAM) ==================== */
+function buildKailasagiriHill(group, x, z) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z);
+
+  // Lush coastal Kailasagiri Hill overlooking the Bay of Bengal
+  const hill = new THREE.Mesh(
+    new THREE.CylinderGeometry(10.5, 17.5, 8.8, 16),
+    new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.88 })
+  );
+  hill.position.y = 4.4;
+  hill.castShadow = true;
+  hill.receiveShadow = true;
+  g.add(hill);
+
+  const terrace = new THREE.Mesh(
+    new THREE.CylinderGeometry(9.6, 10.2, 1.2, 18),
+    new THREE.MeshStandardMaterial({ color: 0xd6d3d1, roughness: 0.7 })
+  );
+  terrace.position.y = 9.2;
+  g.add(terrace);
+
+  // Iconic Giant White Kailasagiri Shiva-Parvati Seated Monument!
+  const whiteMarble = new THREE.MeshStandardMaterial({ color: 0xf8fafc, emissive: 0x38bdf8, emissiveIntensity: 0.14, roughness: 0.35 });
+  const baseSeat = new THREE.Mesh(new THREE.BoxGeometry(9.5, 2.4, 5.2), whiteMarble);
+  baseSeat.position.y = 10.9;
+  g.add(baseSeat);
+
+  for (const [sx, hScale] of [[-2.4, 1.12], [2.4, 0.96]]) {
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 2.0, 6.2 * hScale, 12), whiteMarble);
+    torso.position.set(sx, 12 + 3.0 * hScale, 0);
+    torso.castShadow = true;
+    g.add(torso);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(1.15 * hScale, 12, 12), whiteMarble);
+    head.position.set(sx, 12.6 + 6.4 * hScale, 0);
+    g.add(head);
+    const crown = new THREE.Mesh(new THREE.ConeGeometry(0.65, 1.8, 8), whiteMarble);
+    crown.position.set(sx, 14.1 + 6.5 * hScale, 0);
+    g.add(crown);
+  }
+
+  // Iconic glowing coastal beacon uplight
+  const light = new THREE.PointLight(0x7dd3fc, 48, 46, 1.4);
+  light.position.set(0, 18, 6);
+  g.add(light);
+  group.add(g);
+}
+
+function buildVizagBeachSubmarineLighthouse(group, waterMeshes, rotatingBeacons, x, z) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z);
+  addWaterBasin(g, waterMeshes, 0, 0, 17, 0x0284c7, 0x0c4a6e, 0xe2c799);
+
+  // RK Beach sand strip + Iconic Black-and-Red INS Kurusura Submarine Museum!
+  const sand = new THREE.Mesh(new THREE.BoxGeometry(15, 0.9, 7.5), new THREE.MeshStandardMaterial({ color: 0xe7cca0, roughness: 0.9 }));
+  sand.position.set(0, 0.55, 6.5);
+  g.add(sand);
+
+  const sub = new THREE.Group();
+  sub.position.set(-1.0, 2.2, 6.5);
+  const hullBlack = new THREE.MeshStandardMaterial({ color: 0x181c24, roughness: 0.42, metalness: 0.55 });
+  const hullRed = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.5 });
+
+  const hull = new THREE.Mesh(new THREE.CapsuleGeometry(1.4, 9.6, 8, 16), hullBlack);
+  hull.rotation.z = Math.PI / 2;
+  hull.castShadow = true;
+  sub.add(hull);
+
+  const keel = new THREE.Mesh(new THREE.BoxGeometry(9.6, 0.7, 2.1), hullRed);
+  keel.position.y = -0.9;
+  sub.add(keel);
+
+  const conningTower = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.4, 1.3), hullBlack);
+  conningTower.position.set(0.8, 2.0, 0);
+  conningTower.castShadow = true;
+  sub.add(conningTower);
+
+  const periscope = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.8, 6), new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.85 }));
+  periscope.position.set(0.8, 3.8, 0);
+  sub.add(periscope);
+  g.add(sub);
+
+  // Rocky Dolphin's Nose Headland + Tall Rotating Lighthouse Tower!
+  const cliff = new THREE.Mesh(new THREE.DodecahedronGeometry(4.8, 1), new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.9 }));
+  cliff.scale.set(1.2, 0.7, 1.1);
+  cliff.position.set(2.5, 1.5, -5.5);
+  g.add(cliff);
+
+  const lh = new THREE.Group();
+  lh.position.set(2.5, 2.8, -5.5);
+  const lhMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4 });
+  const stripeMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.4 });
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 2.0, 18.5, 14), lhMat);
+  shaft.position.y = 9.25;
+  shaft.castShadow = true;
+  lh.add(shaft);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(1.55, 1.75, 3.2, 14), stripeMat);
+  band.position.y = 13.5;
+  lh.add(band);
+
+  const lantern = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 2.0, 12), new THREE.MeshBasicMaterial({ color: 0xfef08a }));
+  lantern.position.y = 19.4;
+  lh.add(lantern);
+
+  const beaconPivot = new THREE.Group();
+  beaconPivot.position.y = 19.4;
+  const beamMat = new THREE.MeshBasicMaterial({ color: 0xfef9c3, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
+  for (const dir of [-1, 1]) {
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(4.2, 23, 12, 1, true), beamMat);
+    cone.rotation.z = dir * (Math.PI / 2);
+    cone.position.x = dir * 11.5;
+    beaconPivot.add(cone);
+  }
+  lh.add(beaconPivot);
+  rotatingBeacons.push(beaconPivot);
+  g.add(lh);
+
+  group.add(g);
+}
+
+function buildVizagPortSkyline(group, x, z) {
+  const sky = new THREE.Group();
+  sky.position.set(x, 0, z);
+  sky.rotation.y = -0.5;
+  // Rushikonda IT SEZ glass towers
+  addTowerSkyscraper(sky, { x: -4, z: 0, w: 9.5, h: 30, d: 8.5, color: 0x0c4a6e, accent: 0x38bdf8, spire: true });
+  addTowerSkyscraper(sky, { x: 11, z: -6, w: 9, h: 25, d: 8, color: 0x1e293b, accent: 0xfacc15, spire: true });
+  // Visakhapatnam Iconic Port Crane silhouette!
+  const craneRed = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45, metalness: 0.5 });
+  const craneMast = new THREE.Mesh(new THREE.BoxGeometry(1.8, 22, 1.8), craneRed);
+  craneMast.position.set(-16, 11, -4);
+  craneMast.castShadow = true;
+  sky.add(craneMast);
+  const boom = new THREE.Mesh(new THREE.BoxGeometry(14, 1.3, 1.3), craneRed);
+  boom.position.set(-12, 20.5, -4);
+  boom.rotation.z = 0.16;
+  sky.add(boom);
+  group.add(sky);
+}
+

@@ -1,8 +1,16 @@
 /**
- * Mobile Motion Sensor Steering Wheel Controller.
- * Turns any smartphone/tablet into a real-time steering wheel using DeviceOrientationEvent.
- * Handles iOS 13+ permission prompts, portrait/landscape orientation mapping,
- * neutral calibration, deadzone, smoothing, and progressive steering curves.
+ * Mobile motion controller: the phone is the whole controller.
+ *
+ *  - Rotate the phone like a steering wheel  -> steer
+ *  - Tilt the top edge AWAY from you          -> accelerate (more tilt = more gas)
+ *  - Tilt the top edge TOWARD you             -> brake, then reverse once stopped
+ *  - Hold it at your resting angle            -> coast
+ *
+ * Orientation angles (alpha/beta/gamma) are converted into the gravity direction
+ * in screen space. That stays continuous in every grip (upright, laid back, lying
+ * down) instead of jumping when gamma wraps at +/-90 degrees.
+ * Neutral steering AND neutral pedal angle are captured by recenter(), which the
+ * game calls during the 3-2-1 countdown.
  */
 export class MotionSteeringController {
   constructor({ onStatusChange } = {}) {
@@ -11,14 +19,23 @@ export class MotionSteeringController {
     this.supported = typeof window !== 'undefined' && 'DeviceOrientationEvent' in window;
     this.hasSensorData = false;
 
-    this.rawTilt = 0; // degrees, negative = left, positive = right
-    this.zeroOffset = 0; // calibrated neutral angle
-    this.smoothedTilt = 0;
-    this.steerValue = 0; // -1 (full right) to +1 (full left) matching game physics steerInput!
+    // Steering
+    this.rawSteerDeg = 0; // + = wheel turned right
+    this.zeroSteer = 0;
+    this.smoothedSteer = 0;
+    this.steerValue = 0; // physics convention: +1 = full LEFT, -1 = full RIGHT
+    this.deadzoneDeg = 3.0;
+    this.maxTiltDeg = 34;
 
-    this.deadzoneDeg = 3.5;
-    this.maxTiltDeg = 32; // full lock at 32 degrees of wheel turn
-    this.autoGas = true; // when enabled on mobile, accelerates smoothly unless braking
+    // Pedal (pitch)
+    this.rawPitchDeg = 0; // + = top edge tilted away (screen facing the sky more)
+    this.zeroPitch = null;
+    this.smoothedPitch = 0;
+    this.throttleValue = 0; // 0..1
+    this.brakeValue = 0; // 0..1
+    this.pedalDeadzoneDeg = 4;
+    this.fullGasDeg = 20; // tilt beyond neutral for full throttle
+    this.fullBrakeDeg = 16; // tilt toward you for full brake
 
     this._boundHandler = (e) => this._handleOrientation(e);
   }
@@ -29,7 +46,7 @@ export class MotionSteeringController {
       return false;
     }
 
-    // iOS 13+ requires explicit permission requested synchronously in a user gesture
+    // iOS 13+ requires explicit permission requested inside a user gesture
     if (typeof DeviceOrientationEvent.requestPermission === 'function') {
       try {
         const res = await DeviceOrientationEvent.requestPermission();
@@ -47,12 +64,15 @@ export class MotionSteeringController {
       window.addEventListener('deviceorientation', this._boundHandler, true);
       this.enabled = true;
       this.hasSensorData = false;
-      this.zeroOffset = 0;
-      this.smoothedTilt = 0;
+      this.zeroSteer = 0;
+      this.zeroPitch = null;
+      this.smoothedSteer = 0;
+      this.smoothedPitch = 0;
       this.steerValue = 0;
-      this.onStatusChange('active', 'Tilt phone like a steering wheel!');
+      this.throttleValue = 0;
+      this.brakeValue = 0;
+      this.onStatusChange('active', 'Turn to steer • tilt away to accelerate • tilt back to brake');
 
-      // Detect desktop browsers that expose DeviceOrientationEvent without actual gyroscope hardware
       setTimeout(() => {
         if (this.enabled && !this.hasSensorData) {
           this.onStatusChange('waiting', 'No gyroscope signal yet — use on mobile or keyboard');
@@ -67,8 +87,10 @@ export class MotionSteeringController {
       window.removeEventListener('deviceorientation', this._boundHandler, true);
       this.enabled = false;
       this.steerValue = 0;
-      this.smoothedTilt = 0;
-      this.onStatusChange('off', 'Motion steering off');
+      this.throttleValue = 0;
+      this.brakeValue = 0;
+      this.smoothedSteer = 0;
+      this.onStatusChange('off', 'Motion controls off');
     }
   }
 
@@ -80,10 +102,15 @@ export class MotionSteeringController {
     return await this.enable();
   }
 
+  /** Capture how the player is holding the phone right now as neutral (steer + pedal). */
   recenter() {
-    this.zeroOffset = this.rawTilt;
-    this.smoothedTilt = 0;
+    this.zeroSteer = this.rawSteerDeg;
+    this.zeroPitch = this.rawPitchDeg;
+    this.smoothedSteer = 0;
+    this.smoothedPitch = 0;
     this.steerValue = 0;
+    this.throttleValue = 0;
+    this.brakeValue = 0;
   }
 
   _getScreenAngle() {
@@ -100,50 +127,80 @@ export class MotionSteeringController {
     if (e.beta === null && e.gamma === null) return;
     this.hasSensorData = true;
 
-    const angle = this._getScreenAngle();
-    let tiltDeg = 0;
+    const d2r = Math.PI / 180;
+    const b = (e.beta || 0) * d2r;
+    const g = (e.gamma || 0) * d2r;
 
-    // Map holding the phone like a steering wheel across all 4 screen orientations:
-    // Positive tiltDeg = turning wheel RIGHT, Negative tiltDeg = turning wheel LEFT
+    // World "up" expressed in the device frame (x right, y top, z out of screen)
+    const ux = -Math.cos(b) * Math.sin(g);
+    const uy = Math.sin(b);
+    const uz = Math.cos(b) * Math.cos(g);
+
+    // Rotate into the screen frame for the current orientation
+    const angle = ((this._getScreenAngle() % 360) + 360) % 360;
+    let sx;
+    let sy;
     if (angle === 90) {
-      // Landscape-left (home/charge edge on right): turning wheel right increases beta
-      tiltDeg = e.beta || 0;
-    } else if (angle === -90 || angle === 270) {
-      // Landscape-right: turning wheel right decreases beta
-      tiltDeg = -(e.beta || 0);
+      sx = -uy;
+      sy = ux;
+    } else if (angle === 270) {
+      sx = uy;
+      sy = -ux;
     } else if (angle === 180) {
-      // Upside-down portrait
-      tiltDeg = -(e.gamma || 0);
+      sx = -ux;
+      sy = -uy;
     } else {
-      // Portrait (0 deg): tilting right increases gamma
-      tiltDeg = e.gamma || 0;
+      sx = ux;
+      sy = uy;
     }
 
-    // Clamp extreme flips
-    tiltDeg = Math.max(-75, Math.min(75, tiltDeg));
-    this.rawTilt = tiltDeg;
+    const inPlane = Math.hypot(sx, sy);
+    // Steering: rotation of "up" inside the screen plane (+ = wheel turned right)
+    const steerDeg = inPlane > 0.12 ? Math.atan2(-sx, sy) / d2r : this.rawSteerDeg;
+    // Pedal: how far the screen faces the sky (+ = top edge tilted away from you)
+    const pitchDeg = Math.atan2(uz, inPlane) / d2r;
 
-    const relative = tiltDeg - this.zeroOffset;
+    this.rawSteerDeg = Math.max(-80, Math.min(80, steerDeg));
+    this.rawPitchDeg = pitchDeg;
+    if (this.zeroPitch === null) this.zeroPitch = pitchDeg;
 
-    // Smooth low-pass filter to eliminate hand jitter while staying crisp
-    this.smoothedTilt = this.smoothedTilt * 0.72 + relative * 0.28;
-
-    const absT = Math.abs(this.smoothedTilt);
-    if (absT <= this.deadzoneDeg) {
+    // --- Steering ---
+    const relSteer = this.rawSteerDeg - this.zeroSteer;
+    this.smoothedSteer = this.smoothedSteer * 0.7 + relSteer * 0.3;
+    const absS = Math.abs(this.smoothedSteer);
+    if (absS <= this.deadzoneDeg) {
       this.steerValue = 0;
     } else {
-      const normalized = Math.min(1, (absT - this.deadzoneDeg) / (this.maxTiltDeg - this.deadzoneDeg));
-      // Gentle progressive curve (x^1.22) for rock-steady highway straights + sharp hairpin lock
-      const curved = Math.pow(normalized, 1.22);
-      // Physics convention: +1 = steer LEFT, -1 = steer RIGHT
-      this.steerValue = this.smoothedTilt > 0 ? -curved : curved;
+      const n = Math.min(1, (absS - this.deadzoneDeg) / (this.maxTiltDeg - this.deadzoneDeg));
+      const curved = Math.pow(n, 1.25);
+      this.steerValue = this.smoothedSteer > 0 ? -curved : curved;
+    }
+
+    // --- Pedal ---
+    const relPitch = this.rawPitchDeg - this.zeroPitch;
+    this.smoothedPitch = this.smoothedPitch * 0.75 + relPitch * 0.25;
+    const p = this.smoothedPitch;
+    if (p > this.pedalDeadzoneDeg) {
+      const n = Math.min(1, (p - this.pedalDeadzoneDeg) / (this.fullGasDeg - this.pedalDeadzoneDeg));
+      this.throttleValue = Math.pow(n, 0.85);
+      this.brakeValue = 0;
+    } else if (p < -this.pedalDeadzoneDeg) {
+      const n = Math.min(1, (-p - this.pedalDeadzoneDeg) / (this.fullBrakeDeg - this.pedalDeadzoneDeg));
+      this.brakeValue = n;
+      this.throttleValue = 0;
+    } else {
+      this.throttleValue = 0;
+      this.brakeValue = 0;
     }
   }
 
-  /**
-   * Returns visual wheel angle in degrees (-55 to +55) for the HUD steering wheel icon.
-   */
+  /** Visual wheel angle in degrees for the HUD steering wheel icon. */
   getVisualWheelDeg() {
     return -this.steerValue * 58;
+  }
+
+  /** -1 (full brake) .. +1 (full gas) for the HUD pedal bar. */
+  getPedalValue() {
+    return this.throttleValue - this.brakeValue;
   }
 }
