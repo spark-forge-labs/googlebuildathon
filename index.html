@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>India Desk GP — 3D City Road Racing</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="game-root">
+      <canvas id="game-canvas"></canvas>
+
+      <!-- Speed lines overlay during nitro -->
+      <div id="speed-lines" class="hidden"></div>
+
+      <!-- Top HUD bar (visible during race) -->
+      <div id="hud" class="hidden">
+        <div class="hud-top-left">
+          <div class="hud-card position-card">
+            <span class="label">POS</span>
+            <div class="pos-row">
+              <span id="hud-pos">1</span><span id="hud-pos-suffix">st</span>
+              <span class="pos-total">/ 6</span>
+            </div>
+          </div>
+          <div class="hud-card lap-card">
+            <span class="label">LAP</span>
+            <div class="val"><span id="hud-lap">1</span><span class="sub"> / 3</span></div>
+          </div>
+          <div class="hud-card time-card">
+            <span class="label">TIME</span>
+            <div class="val mono" id="hud-time">00:00.00</div>
+          </div>
+        </div>
+
+        <div class="hud-top-center">
+          <div id="landmark-banner" class="landmark-banner">
+            <span class="landmark-te" id="landmark-te">హైదరాబాద్</span>
+            <span class="landmark-en" id="landmark-en">DECCAN START STRAIGHT</span>
+          </div>
+        </div>
+
+        <div class="hud-top-right">
+          <button id="btn-motion-hud" class="hud-btn" title="Mobile Steering Wheel Sensor">WHEEL: OFF</button>
+          <button id="btn-camera" class="hud-btn" title="Switch Camera (C)">CAM: CHASE</button>
+          <button id="btn-audio" class="hud-btn" title="Toggle Sound (M)">SFX: ON</button>
+          <button id="btn-reset" class="hud-btn" title="Reset Car to Road (R)">RESET</button>
+          <button id="btn-menu" class="hud-btn" title="Change City / Car">MENU</button>
+        </div>
+
+        <!-- Live Mobile Motion Sensor Steering Wheel Gauge -->
+        <div id="gyro-wheel-hud" class="gyro-wheel-hud hidden">
+          <svg id="gyro-wheel-svg" class="gyro-wheel-svg" viewBox="0 0 100 100" aria-hidden="true">
+            <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="8" />
+            <circle cx="50" cy="50" r="11" fill="#ff8c2b" />
+            <line x1="50" y1="8" x2="50" y2="39" stroke="#f7c948" stroke-width="7" stroke-linecap="round" />
+            <line x1="14" y1="62" x2="40" y2="54" stroke="rgba(255,255,255,0.85)" stroke-width="6" stroke-linecap="round" />
+            <line x1="86" y1="62" x2="60" y2="54" stroke="rgba(255,255,255,0.85)" stroke-width="6" stroke-linecap="round" />
+          </svg>
+          <button id="btn-recenter-wheel" class="recenter-btn">RECENTER</button>
+        </div>
+
+        <!-- Minimap -->
+        <div class="minimap-wrap">
+          <canvas id="minimap-canvas" width="180" height="130"></canvas>
+          <div class="minimap-label" id="minimap-label">HYDERABAD DESK CIRCUIT</div>
+        </div>
+
+        <!-- Bottom-right telemetry -->
+        <div class="telemetry-wrap">
+          <div class="boost-group">
+            <div class="boost-header">
+              <span id="boost-label">IRANI CHAI NITRO</span>
+              <span id="drift-badge" class="drift-badge hidden">DRIFT +</span>
+            </div>
+            <div class="boost-bar-bg">
+              <div id="boost-bar-fill" class="boost-bar-fill"></div>
+            </div>
+          </div>
+          <div class="speedo-card">
+            <div class="speed-num" id="hud-speed">0</div>
+            <div class="speed-unit">KM/H</div>
+            <div class="gear-pill" id="hud-gear">1</div>
+          </div>
+        </div>
+
+        <!-- Wrong way / status toast -->
+        <div id="toast-banner" class="toast-banner hidden">WRONG WAY!</div>
+
+        <!-- Mobile touch pedals & fallback steering -->
+        <div id="touch-controls" class="touch-controls">
+          <div class="touch-left">
+            <div id="touch-steer-arrows" class="touch-arrow-pair">
+              <button id="touch-left-btn" class="touch-btn">◀</button>
+              <button id="touch-right-btn" class="touch-btn">▶</button>
+            </div>
+            <button id="touch-brake-btn" class="touch-btn brake">BRAKE</button>
+          </div>
+          <div class="touch-right">
+            <button id="touch-drift-btn" class="touch-btn small">DRIFT</button>
+            <button id="touch-boost-btn" class="touch-btn accent">NITRO</button>
+            <button id="touch-gas-btn" class="touch-btn gas">GAS</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Countdown overlay -->
+      <div id="countdown-overlay" class="countdown-overlay hidden">
+        <div id="countdown-text" class="countdown-text">3</div>
+      </div>
+
+      <!-- Start Menu Overlay -->
+      <div id="start-overlay" class="overlay">
+        <div class="menu-panel">
+          <div class="menu-badge">INDIA DESK GRAND PRIX • 7 ICONIC CITIES</div>
+          <h1 class="menu-title">INDIA <span>DESK GP</span></h1>
+          <p class="menu-subtitle" id="city-subtitle">
+            Charminar • Hussain Sagar • Cable Bridge • Cyber Towers
+          </p>
+
+          <!-- 7-City Selector -->
+          <div class="section-block">
+            <div class="section-label">1. SELECT YOUR CITY CIRCUIT</div>
+            <div class="city-grid" id="city-grid"></div>
+          </div>
+
+          <!-- 5-Car Selector -->
+          <div class="section-block">
+            <div class="section-label">2. SELECT YOUR RIDE</div>
+            <div class="car-grid" id="car-grid"></div>
+          </div>
+
+          <!-- Mobile Steering Wheel Sensor Bar -->
+          <div class="motion-bar">
+            <button id="btn-motion-menu" class="motion-toggle-btn">MOBILE STEERING WHEEL</button>
+            <span id="motion-status-text" class="motion-status">On mobile? Tilt your phone like a real steering wheel!</span>
+          </div>
+
+          <div class="controls-legend">
+            <div class="ctrl-item"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>Arrows</kbd> Drive</div>
+            <div class="ctrl-item"><kbd>Space</kbd> Drift</div>
+            <div class="ctrl-item"><kbd>Shift</kbd> Nitro</div>
+            <div class="ctrl-item"><kbd>C</kbd> 4 Cameras</div>
+            <div class="ctrl-item"><kbd>R</kbd> Reset</div>
+          </div>
+
+          <div class="menu-actions">
+            <button id="btn-start-race" class="primary-btn">START RACE</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Race Finish Overlay -->
+      <div id="finish-overlay" class="overlay hidden">
+        <div class="menu-panel finish-panel">
+          <div class="menu-badge" id="finish-badge">CHECKERED FLAG • INDIA DESK GP</div>
+          <h2 class="finish-title" id="finish-title">1ST PLACE!</h2>
+          <div class="finish-stats">
+            <div class="stat-box">
+              <span class="label">TOTAL TIME</span>
+              <span class="val mono" id="finish-total-time">00:00.00</span>
+            </div>
+            <div class="stat-box">
+              <span class="label">BEST LAP</span>
+              <span class="val mono" id="finish-best-lap">00:00.00</span>
+            </div>
+            <div class="stat-box">
+              <span class="label">TOP SPEED</span>
+              <span class="val mono" id="finish-top-speed">0 KM/H</span>
+            </div>
+          </div>
+          <div class="standings-list" id="finish-standings"></div>
+          <div class="menu-actions">
+            <button id="btn-race-again" class="primary-btn">RACE AGAIN</button>
+            <button id="btn-back-menu" class="secondary-btn">CHANGE CITY / CAR</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
