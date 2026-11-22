@@ -34,6 +34,7 @@ const ui = {
   btnMotionMenu: document.getElementById('btn-motion-menu'),
   btnMotionHud: document.getElementById('btn-motion-hud'),
   motionStatusText: document.getElementById('motion-status-text'),
+  pedalFill: document.getElementById('pedal-fill'),
   gyroWheelHud: document.getElementById('gyro-wheel-hud'),
   gyroWheelSvg: document.getElementById('gyro-wheel-svg'),
   touchSteerArrows: document.getElementById('touch-steer-arrows'),
@@ -51,6 +52,7 @@ const ui = {
 
 const canvas = document.getElementById('game-canvas');
 const engine = new GameEngine(canvas, ui);
+if (new URLSearchParams(location.search).has('debug')) window.__engine = engine;
 
 // Populate 7 Indian City Circuits
 function renderCitySelector() {

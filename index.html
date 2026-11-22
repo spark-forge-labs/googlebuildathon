@@ -57,13 +57,18 @@
             <line x1="14" y1="62" x2="40" y2="54" stroke="rgba(255,255,255,0.85)" stroke-width="6" stroke-linecap="round" />
             <line x1="86" y1="62" x2="60" y2="54" stroke="rgba(255,255,255,0.85)" stroke-width="6" stroke-linecap="round" />
           </svg>
+          <div class="pedal-gauge" title="Tilt away = gas, tilt back = brake">
+            <span class="pedal-tag gas">GAS</span>
+            <div class="pedal-track"><div id="pedal-fill" class="pedal-fill"></div><div class="pedal-mid"></div></div>
+            <span class="pedal-tag brk">BRK</span>
+          </div>
           <button id="btn-recenter-wheel" class="recenter-btn">RECENTER</button>
         </div>
 
         <!-- Minimap -->
         <div class="minimap-wrap">
           <canvas id="minimap-canvas" width="180" height="130"></canvas>
-          <div class="minimap-label" id="minimap-label">HYDERABAD DESK CIRCUIT</div>
+          <div class="minimap-label" id="minimap-label">HYDERABAD CIRCUIT</div>
         </div>
 
         <!-- Bottom-right telemetry -->
@@ -112,8 +117,8 @@
       <!-- Start Menu Overlay -->
       <div id="start-overlay" class="overlay">
         <div class="menu-panel">
-          <div class="menu-badge">INDIA DESK GRAND PRIX • 7 ICONIC CITIES</div>
-          <h1 class="menu-title">INDIA <span>DESK GP</span></h1>
+          <div class="menu-badge">INDIA GRAND PRIX • 9 ICONIC CITIES</div>
+          <h1 class="menu-title">INDIA <span>GP</span></h1>
           <p class="menu-subtitle" id="city-subtitle">
             Charminar • Hussain Sagar • Cable Bridge • Cyber Towers
           </p>
@@ -133,7 +138,7 @@
           <!-- Mobile Steering Wheel Sensor Bar -->
           <div class="motion-bar">
             <button id="btn-motion-menu" class="motion-toggle-btn">MOBILE STEERING WHEEL</button>
-            <span id="motion-status-text" class="motion-status">On mobile? Tilt your phone like a real steering wheel!</span>
+            <span id="motion-status-text" class="motion-status">On mobile? Turn your phone to steer, tilt it away to accelerate, back to brake!</span>
           </div>
 
           <div class="controls-legend">
@@ -147,13 +152,14 @@
           <div class="menu-actions">
             <button id="btn-start-race" class="primary-btn">START RACE</button>
           </div>
+          <p class="menu-credits">Ferrari 458 Italia 3D model by vicent091036 (CC BY 4.0) • Trees by EZ-Tree • HDRIs from Poly Haven (CC0)</p>
         </div>
       </div>
 
       <!-- Race Finish Overlay -->
       <div id="finish-overlay" class="overlay hidden">
         <div class="menu-panel finish-panel">
-          <div class="menu-badge" id="finish-badge">CHECKERED FLAG • INDIA DESK GP</div>
+          <div class="menu-badge" id="finish-badge">CHECKERED FLAG • INDIA GP</div>
           <h2 class="finish-title" id="finish-title">1ST PLACE!</h2>
           <div class="finish-stats">
             <div class="stat-box">

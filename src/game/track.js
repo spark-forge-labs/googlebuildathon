@@ -5,86 +5,160 @@ export const ROAD_WIDTH = 15.0;
 export const ROAD_HALF_WIDTH = ROAD_WIDTH * 0.5;
 export const TRACK_SAMPLES = 480;
 
-function createRoadTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 1024;
-  const ctx = canvas.getContext('2d');
+function createRoadMaps() {
+  // Realistic weathered circuit asphalt: grey aggregate, rubbered racing line,
+  // worn white edge lines. One tile = full road width x ~14 units of length.
+  const W = 1024;
+  const H = 1024;
+  const color = document.createElement('canvas');
+  color.width = W;
+  color.height = H;
+  const ctx = color.getContext('2d');
+  const bump = document.createElement('canvas');
+  bump.width = bump.height = 512;
+  const b = bump.getContext('2d');
+  const rough = document.createElement('canvas');
+  rough.width = rough.height = 512;
+  const r = rough.getContext('2d');
 
-  // Deep realistic dark tarmac base
-  ctx.fillStyle = '#20232b';
-  ctx.fillRect(0, 0, 1024, 1024);
+  let seed = 1337;
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
 
-  // Fine asphalt aggregate micro-grain
-  for (let i = 0; i < 42000; i++) {
-    const x = Math.random() * 1024;
-    const y = Math.random() * 1024;
-    const v = 22 + Math.floor(Math.random() * 34);
-    ctx.fillStyle = `rgb(${v},${v + 1},${v + 4})`;
-    ctx.fillRect(x, y, 2, 2);
+  ctx.fillStyle = '#4b4b48';
+  ctx.fillRect(0, 0, W, H);
+  b.fillStyle = '#7a7a7a';
+  b.fillRect(0, 0, 512, 512);
+  r.fillStyle = 'rgb(232,232,232)';
+  r.fillRect(0, 0, 512, 512);
+
+  // Large-scale tonal variation (wrap-safe: drawn 3x vertically)
+  for (let i = 0; i < 260; i++) {
+    const x = rnd() * W;
+    const y = rnd() * H;
+    const rad = 30 + rnd() * 140;
+    const dark = rnd() > 0.5;
+    ctx.globalAlpha = 0.035 + rnd() * 0.06;
+    ctx.fillStyle = dark ? '#2e2e2c' : '#6a6a66';
+    for (const oy of [-H, 0, H]) {
+      ctx.beginPath();
+      ctx.ellipse(x, y + oy, rad, rad * (0.5 + rnd()), rnd() * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // Aggregate stones
+  for (let i = 0; i < 160000; i++) {
+    const x = rnd() * W;
+    const y = rnd() * H;
+    const v = rnd();
+    const g = v < 0.55 ? 40 + v * 50 : 90 + v * 70;
+    ctx.fillStyle = `rgb(${g | 0},${g | 0},${(g - 2) | 0})`;
+    const sz = rnd() < 0.08 ? 3 : rnd() < 0.5 ? 2 : 1;
+    ctx.fillRect(x, y, sz, sz);
+    if (i % 3 === 0) {
+      const bv = 60 + rnd() * 150;
+      b.fillStyle = `rgb(${bv | 0},${bv | 0},${bv | 0})`;
+      b.fillRect(x * 0.5, y * 0.5, 1 + (sz > 1 ? 1 : 0), 1 + (sz > 1 ? 1 : 0));
+    }
   }
 
-  // Subtle asphalt weathering & micro-cracks
-  ctx.strokeStyle = 'rgba(12, 14, 18, 0.35)';
-  ctx.lineWidth = 1.5;
-  for (let c = 0; c < 18; c++) {
-    let cx = 80 + Math.random() * 860;
-    let cy = Math.random() * 1024;
+  // Hairline cracks and sealed joints
+  ctx.strokeStyle = 'rgba(20,20,19,0.55)';
+  b.strokeStyle = 'rgb(30,30,30)';
+  for (let c = 0; c < 26; c++) {
+    let x = 90 + rnd() * (W - 180);
+    let y = rnd() * H;
+    ctx.lineWidth = 0.8 + rnd() * 1.4;
+    b.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    for (let s = 0; s < 5; s++) {
-      cx += (Math.random() - 0.5) * 44;
-      cy += 18 + Math.random() * 28;
-      ctx.lineTo(cx, cy);
+    b.beginPath();
+    ctx.moveTo(x, y);
+    b.moveTo(x * 0.5, y * 0.5);
+    const steps = 4 + ((rnd() * 6) | 0);
+    for (let k = 0; k < steps; k++) {
+      x += (rnd() - 0.5) * 50;
+      y += (rnd() - 0.3) * 40;
+      ctx.lineTo(x, y);
+      b.lineTo(x * 0.5, y * 0.5);
     }
     ctx.stroke();
+    b.stroke();
   }
 
-  // Realistic rubberized racing line grooves in both lanes
-  for (const gx of [290, 734]) {
-    const groove = ctx.createLinearGradient(gx - 120, 0, gx + 120, 0);
-    groove.addColorStop(0, 'rgba(8,10,14,0)');
-    groove.addColorStop(0.5, 'rgba(8,10,14,0.34)');
-    groove.addColorStop(1, 'rgba(8,10,14,0)');
-    ctx.fillStyle = groove;
-    ctx.fillRect(gx - 120, 0, 240, 1024);
+  // Rubbered racing lines (darker, smoother) + oil drip trail in the middle
+  for (const gx of [300, 724]) {
+    const grad = ctx.createLinearGradient(gx - 150, 0, gx + 150, 0);
+    grad.addColorStop(0, 'rgba(18,18,18,0)');
+    grad.addColorStop(0.5, 'rgba(18,18,18,0.32)');
+    grad.addColorStop(1, 'rgba(18,18,18,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(gx - 150, 0, 300, H);
+    const rg = r.createLinearGradient((gx - 130) / 2, 0, (gx + 130) / 2, 0);
+    rg.addColorStop(0, 'rgba(160,160,160,0)');
+    rg.addColorStop(0.5, 'rgba(160,160,160,0.9)');
+    rg.addColorStop(1, 'rgba(160,160,160,0)');
+    r.fillStyle = rg;
+    r.fillRect((gx - 130) / 2, 0, 130, 512);
+  }
+  for (let i = 0; i < 70; i++) {
+    ctx.globalAlpha = 0.12 + rnd() * 0.18;
+    ctx.fillStyle = '#1a1a19';
+    ctx.beginPath();
+    ctx.ellipse(512 + (rnd() - 0.5) * 60, rnd() * H, 4 + rnd() * 10, 6 + rnd() * 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Worn white edge lines (~0.2 units wide, set in from the kerb)
+  const lineW = 13;
+  for (const lx of [26, W - 26 - lineW]) {
+    ctx.fillStyle = 'rgb(232,232,226)';
+    ctx.fillRect(lx, 0, lineW, H);
+    r.fillStyle = 'rgb(150,150,150)';
+    r.fillRect(lx / 2, 0, lineW / 2, 512);
+    // wear: let asphalt show through
+    for (let i = 0; i < 2600; i++) {
+      ctx.fillStyle = rnd() > 0.5 ? 'rgba(70,70,68,0.55)' : 'rgba(110,110,106,0.4)';
+      ctx.fillRect(lx + rnd() * lineW, rnd() * H, 1 + rnd() * 2, 1 + rnd() * 3);
+    }
   }
 
-  // Crisp outer Indian expressway solid amber-gold shoulder lines
-  ctx.fillStyle = '#f5be36';
-  ctx.fillRect(42, 0, 20, 1024);
-  ctx.fillRect(1024 - 62, 0, 20, 1024);
-
-  // Subtle white inner rumble line
-  ctx.fillStyle = 'rgba(255,255,255,0.22)';
-  ctx.fillRect(72, 0, 6, 1024);
-  ctx.fillRect(1024 - 78, 0, 6, 1024);
-
-  // Crisp center dashed white highway lane divider
-  ctx.fillStyle = 'rgba(248, 250, 252, 0.94)';
-  for (let y = 24; y < 1024; y += 256) {
-    ctx.fillRect(503, y, 18, 128);
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(1, 58);
-  tex.anisotropy = 16;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+  const make = (cv, srgb) => {
+    const t = new THREE.CanvasTexture(cv);
+    t.wrapS = THREE.ClampToEdgeWrapping;
+    t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(1, 58);
+    t.anisotropy = 16;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  return { map: make(color, true), bumpMap: make(bump, false), roughnessMap: make(rough, false) };
 }
 
 function createKerbTexture() {
+  // FIA red/white kerb with worn paint and rubber marks
   const canvas = document.createElement('canvas');
   canvas.width = 64;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  const stripeH = 64;
-  for (let i = 0; i < 4; i++) {
-    ctx.fillStyle = i % 2 === 0 ? '#f5b82e' : '#181a22';
+  const stripeH = 128;
+  for (let i = 0; i < 2; i++) {
+    ctx.fillStyle = i % 2 === 0 ? '#c4161c' : '#ecebe6';
     ctx.fillRect(0, i * stripeH, 64, stripeH);
   }
+  for (let k = 0; k < 900; k++) {
+    ctx.fillStyle = Math.random() > 0.5 ? 'rgba(40,40,40,0.18)' : 'rgba(255,255,255,0.08)';
+    ctx.fillRect(Math.random() * 64, Math.random() * 256, 1 + Math.random() * 3, 1 + Math.random() * 3);
+  }
+  const g = ctx.createLinearGradient(0, 0, 64, 0);
+  g.addColorStop(0, 'rgba(0,0,0,0.25)');
+  g.addColorStop(0.4, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 256);
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
@@ -115,11 +189,10 @@ function createBoostPadTexture(accentHex, secondaryHex) {
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#0c1424';
-  ctx.fillRect(0, 0, 256, 256);
-
-  const c1 = '#' + secondaryHex.toString(16).padStart(6, '0');
-  const c2 = '#' + accentHex.toString(16).padStart(6, '0');
+  // Painted road chevrons (thermoplastic paint look) on a transparent background
+  ctx.clearRect(0, 0, 256, 256);
+  const c1 = '#f4f1e8';
+  const c2 = '#f2b134';
 
   for (let i = 0; i < 3; i++) {
     const y = 32 + i * 76;
@@ -311,18 +384,22 @@ export class RaceTrack {
     roadGeo.setAttribute('uv', new THREE.Float32BufferAttribute(roadUVs, 2));
     roadGeo.setIndex(roadIndices);
 
+    const { map, bumpMap, roughnessMap } = createRoadMaps();
     const roadMat = new THREE.MeshStandardMaterial({
-      map: createRoadTexture(),
-      roughness: 0.74,
-      metalness: 0.14,
+      map,
+      bumpMap,
+      bumpScale: 0.6,
+      roughnessMap,
+      roughness: 1.0,
+      metalness: 0.0,
     });
     const roadMesh = new THREE.Mesh(roadGeo, roadMat);
     roadMesh.receiveShadow = true;
     this.group.add(roadMesh);
 
     // 2. Raised Indian Highway Kerbs + Outer Deck Skirt
-    const kerbMat = new THREE.MeshStandardMaterial({ map: createKerbTexture(), roughness: 0.62, metalness: 0.08 });
-    const skirtMat = new THREE.MeshStandardMaterial({ color: 0x353b47, roughness: 0.75, metalness: 0.2 });
+    const kerbMat = new THREE.MeshStandardMaterial({ map: createKerbTexture(), roughness: 0.7, metalness: 0 });
+    const skirtMat = new THREE.MeshStandardMaterial({ color: 0x9a968e, roughness: 0.9, metalness: 0 });
 
     for (const side of [-1, 1]) {
       const kPos = [];
@@ -408,8 +485,8 @@ export class RaceTrack {
 
     // 4. Reflective Cat's-Eye Road Studs along the highway edges (InstancedMesh for ultra-high FPS!)
     const studGeo = new THREE.BoxGeometry(0.28, 0.08, 0.28);
-    const studMatAmber = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
-    const studMatCyan = new THREE.MeshBasicMaterial({ color: this.city.secondaryHex });
+    const studMatAmber = new THREE.MeshStandardMaterial({ color: 0xe8e4d8, roughness: 0.3, metalness: 0.3 });
+    const studMatCyan = new THREE.MeshStandardMaterial({ color: 0xf2b134, roughness: 0.3, metalness: 0.3 });
     const studPositionsAmber = [];
     const studPositionsCyan = [];
     for (let i = 0; i < N; i += 6) {
@@ -439,7 +516,7 @@ export class RaceTrack {
     makeInstancedStuds(studPositionsCyan, studMatCyan);
 
     // 5. Metallic Highway Guardrails on elevated sections
-    const railMat = new THREE.MeshStandardMaterial({ color: 0xdce4f0, roughness: 0.3, metalness: 0.72 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0xb9bcc0, roughness: 0.45, metalness: 0.9 });
     const postGeo = new THREE.BoxGeometry(0.24, 1.05, 0.24);
     for (let i = 0; i < N; i += 4) {
       const s = this.samples[i];
@@ -471,7 +548,7 @@ export class RaceTrack {
       }
     }
 
-    // 6. Start / Finish Checkered Strip
+    // 6. Start / Finish Checkered Strip + Painted Staggered F1/GT Starting Grid Boxes
     const sfFrame = this.getFrameAt(0.0);
     const sfMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(ROAD_WIDTH, 3.8),
@@ -483,6 +560,59 @@ export class RaceTrack {
     sfMesh.receiveShadow = true;
     this.group.add(sfMesh);
 
+    // Painted white starting grid brackets behind Start/Finish line (P1..P6)
+    const gridLineMat = new THREE.MeshStandardMaterial({ color: 0xe8e8e2, roughness: 0.6, transparent: true, opacity: 0.9 });
+    for (let slot = 0; slot < 6; slot++) {
+      const row = Math.floor(slot / 2);
+      const col = slot % 2 === 0 ? -1 : 1;
+      const su = (1 - 0.015 - row * 0.017) % 1;
+      const gf = this.getFrameAt(su);
+      const boxGroup = new THREE.Group();
+      const frontBar = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.24), gridLineMat);
+      frontBar.position.set(0, 2.35, 0);
+      boxGroup.add(frontBar);
+      for (const sx of [-1.3, 1.3]) {
+        const sideBar = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 1.6), gridLineMat);
+        sideBar.position.set(sx, 1.65, 0);
+        boxGroup.add(sideBar);
+      }
+      boxGroup.position.copy(gf.point).addScaledVector(gf.right, col * 3.1).addScaledVector(gf.normal, 0.055);
+      boxGroup.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(gf.right, gf.tangent, gf.normal));
+      this.group.add(boxGroup);
+    }
+
+    // FIA Red-and-White Apex Rumble Strips & Outer Corner Safety Chevron Barriers!
+    const apexRed = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.55 });
+    const apexWhite = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.55 });
+    const chevronGeo = new THREE.BoxGeometry(1.5, 1.15, 0.26);
+    const apexBlockGeo = new THREE.BoxGeometry(1.05, 0.14, 1.5);
+    let apexToggle = false;
+    for (let i = 0; i < N; i += 3) {
+      const s = this.samples[i];
+      if (s.curvature > 0.22 && s.point.y < 1.1) {
+        apexToggle = !apexToggle;
+        const m = new THREE.Matrix4().makeBasis(s.right.clone().negate(), s.normal, s.tangent);
+        const q = new THREE.Quaternion().setFromRotationMatrix(m);
+        for (const side of [-1, 1]) {
+          const block = new THREE.Mesh(apexBlockGeo, apexToggle ? apexRed : apexWhite);
+          block.position.copy(s.point).addScaledVector(s.right, side * (halfW + 0.52));
+          block.position.y += 0.09;
+          block.quaternion.copy(q);
+          block.receiveShadow = true;
+          this.group.add(block);
+        }
+        // High-visibility red/white corner safety barrier markers outside tight bends
+        if (s.curvature > 0.30 && i % 6 === 0) {
+          const barrier = new THREE.Mesh(chevronGeo, apexToggle ? apexRed : apexWhite);
+          barrier.position.copy(s.point).addScaledVector(s.right, halfW + 2.35);
+          barrier.position.y += 0.62;
+          barrier.quaternion.copy(q);
+          barrier.castShadow = true;
+          this.group.add(barrier);
+        }
+      }
+    }
+
     // 7. Glowing Boost Pads
     const padTex = createBoostPadTexture(this.city.accentHex, this.city.secondaryHex);
     const padGeo = new THREE.PlaneGeometry(4.4, 7.2);
@@ -492,8 +622,10 @@ export class RaceTrack {
         map: padTex,
         emissive: new THREE.Color(this.city.secondaryHex),
         emissiveMap: padTex,
-        emissiveIntensity: 0.95,
-        roughness: 0.28,
+        emissiveIntensity: 0.25,
+        roughness: 0.6,
+        transparent: true,
+        opacity: 0.85,
       });
       const pad = new THREE.Mesh(padGeo, padMat);
       pad.position.copy(f.point).addScaledVector(f.normal, 0.06);
@@ -505,7 +637,7 @@ export class RaceTrack {
   }
 
   update(time) {
-    const pulse = 0.78 + 0.35 * Math.sin(time * 6.0);
+    const pulse = 0.18 + 0.12 * Math.sin(time * 4.0);
     for (const pad of this.boostPadMeshes) {
       pad.mesh.material.emissiveIntensity = pulse;
     }

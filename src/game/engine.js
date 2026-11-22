@@ -7,6 +7,15 @@ import { Racer, resolveCarCollisions, TOTAL_LAPS } from './physics.js';
 import { ParticleSystem } from './particles.js';
 import { SoundEngine } from './audio.js';
 import { MotionSteeringController } from './motionControls.js';
+import { buildRealSky, loadHdriEnvironment, loadTreeLibrary, ensureTreeVariants } from './realWorld.js';
+import { preloadCarModel } from './carModels.js';
+import { Q } from './quality.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 const CAMERA_MODES = ['CHASE', 'HOOD', 'BUMPER', 'DESK TOP'];
 
@@ -72,16 +81,18 @@ export class GameEngine {
     this.canvas = canvas;
     this.ui = ui;
 
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: Q.antialias, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Q.pixelRatio);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.16;
+    this.renderer.toneMappingExposure = 0.62;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.sky = null;
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.4, 680);
+    this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.4, 2600);
     this.camModeIdx = 0;
     this.camPos = new THREE.Vector3(0, 45, 110);
     this.camLook = new THREE.Vector3(0, 4, 0);
@@ -120,11 +131,14 @@ export class GameEngine {
       drift: false,
       boost: false,
       analogSteer: 0,
-      motionAutoGas: false,
+      analogThrottle: 0,
+      analogBrake: 0,
     };
 
     // Load initial city (Hyderabad) live on top of the desk!
     this.loadCityWorld(this.selectedCityId);
+    this.setupPostProcessing();
+    this.loadHdAssets();
 
     window.addEventListener('resize', () => this.onResize());
     this.loop();
@@ -137,10 +151,11 @@ export class GameEngine {
     this.dirLight = new THREE.DirectionalLight(0xffe7c2, 2.05);
     this.dirLight.position.set(-68, 92, 48);
     this.dirLight.castShadow = true;
-    this.dirLight.shadow.mapSize.width = 2048;
-    this.dirLight.shadow.mapSize.height = 2048;
+    this.dirLight.shadow.mapSize.width = Q.shadowMapSize;
+    this.dirLight.shadow.mapSize.height = Q.shadowMapSize;
+    this.dirLight.shadow.normalBias = 0.04;
     this.dirLight.shadow.camera.near = 20;
-    this.dirLight.shadow.camera.far = 290;
+    this.dirLight.shadow.camera.far = 400;
     const d = 128;
     this.dirLight.shadow.camera.left = -d;
     this.dirLight.shadow.camera.right = d;
@@ -156,6 +171,50 @@ export class GameEngine {
     this.rimLight = new THREE.DirectionalLight(0x60a5fa, 0.7);
     this.rimLight.position.set(85, 45, -80);
     this.scene.add(this.rimLight);
+  }
+
+  /** Film-style post chain on desktop: ambient occlusion, gentle bloom, SMAA. Phones skip it. */
+  setupPostProcessing() {
+    this.composer = null;
+    if (!Q.post) return;
+    try {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const composer = new EffectComposer(this.renderer);
+      composer.setPixelRatio(Q.pixelRatio);
+      composer.setSize(w, h);
+      composer.addPass(new RenderPass(this.scene, this.camera));
+      const gtao = new GTAOPass(this.scene, this.camera, w, h);
+      gtao.output = GTAOPass.OUTPUT.Default;
+      gtao.updateGtaoMaterial({ radius: 1.6, distanceExponent: 1.5, thickness: 2, scale: 1, samples: 12 });
+      gtao.blendIntensity = 0.85;
+      composer.addPass(gtao);
+      const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.18, 0.5, 0.92);
+      composer.addPass(bloom);
+      composer.addPass(new OutputPass());
+      composer.addPass(new SMAAPass(w * Q.pixelRatio, h * Q.pixelRatio));
+      this.composer = composer;
+    } catch (e) {
+      console.warn('Post-processing unavailable, rendering directly', e);
+      this.composer = null;
+    }
+  }
+
+  /** Real car model + EZ-Tree load after the menu is visible, then the city is rebuilt in HD. */
+  loadHdAssets() {
+    const badge = document.createElement('div');
+    badge.textContent = 'Loading real cars & trees…';
+    badge.style.cssText =
+      'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:50;padding:5px 12px;border-radius:999px;' +
+      'background:rgba(10,14,24,.8);color:#f7c948;font:700 11px/1.2 system-ui,sans-serif;letter-spacing:.06em;pointer-events:none';
+    document.body.appendChild(badge);
+    this.pendingHdRebuild = false;
+    Promise.all([preloadCarModel(), loadTreeLibrary()]).then(() => {
+      ensureTreeVariants(this.renderer);
+      badge.remove();
+      if (this.state === 'MENU') this.loadCityWorld(this.selectedCityId);
+      else this.pendingHdRebuild = true;
+    });
   }
 
   loadCityWorld(cityId) {
@@ -174,18 +233,33 @@ export class GameEngine {
     }
     this.particles.clearSkids();
 
-    // Update atmosphere, lighting & PBR clearcoat reflections for this city!
-    this.scene.background = new THREE.Color(city.fogColor);
-    this.scene.fog = new THREE.FogExp2(city.fogColor, 0.0023);
-    this.dirLight.color.setHex(city.sunColor);
-    this.dirLight.intensity = city.sunIntensity;
-    this.hemiLight.color.setHex(city.hemiSky);
-    this.hemiLight.groundColor.setHex(city.hemiGround);
-    this.rimLight.color.setHex(city.secondaryHex);
-
+    // Real-world atmosphere: physical sky, sun position, haze & sky reflections
+    if (this.sky) this.scene.remove(this.sky);
     if (this.envRenderTarget) this.envRenderTarget.dispose();
-    this.envRenderTarget = buildStudioEnvironment(this.renderer, city.accentHex, city.skyBottom);
-    this.scene.environment = this.envRenderTarget.texture;
+    const atmo = buildRealSky(this.renderer, city);
+    this.sky = atmo.sky;
+    this.scene.add(this.sky);
+    this.envRenderTarget = atmo.envRT;
+    this.scene.environment = atmo.envRT.texture;
+    this.scene.environmentIntensity = 0.9;
+    // Swap in the real-world HDRI for reflections as soon as it's ready
+    loadHdriEnvironment(this.renderer, atmo.hdri).then((rt) => {
+      if (rt && this.currentCity && this.currentCity.id === city.id) this.scene.environment = rt.texture;
+    });
+    this.scene.background = null;
+    this.scene.fog = new THREE.FogExp2(atmo.haze, 0.0016);
+
+    this.dirLight.color.copy(atmo.sunColor);
+    this.dirLight.intensity = atmo.sunIntensity;
+    this.dirLight.position.copy(atmo.sunDir).multiplyScalar(160);
+    this.dirLight.target.position.set(0, 0, 0);
+    this.scene.add(this.dirLight.target);
+    this.hemiLight.color.set(0xbfd6ff);
+    this.hemiLight.groundColor.set(0x5b4a36);
+    this.hemiLight.intensity = 0.55;
+    this.rimLight.color.set(0xffffff);
+    this.rimLight.intensity = 0.15;
+    this.lampGlow.intensity = 0;
 
     // Build city's track & desk diorama with all iconic towers and bridges
     this.track = new RaceTrack(city);
@@ -195,7 +269,7 @@ export class GameEngine {
 
     // Update city-specific HUD labels
     if (this.ui.boostLabel) this.ui.boostLabel.textContent = city.nitroName;
-    if (this.ui.minimapLabel) this.ui.minimapLabel.textContent = `${city.name.toUpperCase()} DESK CIRCUIT`;
+    if (this.ui.minimapLabel) this.ui.minimapLabel.textContent = `${city.name.toUpperCase()} CIRCUIT`;
 
     this.spawnRacers();
   }
@@ -223,6 +297,7 @@ export class GameEngine {
 
     entries.forEach((entry, gridIdx) => {
       const rig = buildVehicleMesh({
+        lite: Q.carLite,
         bodyColor: entry.spec.bodyColor,
         accentColor: entry.spec.accentColor,
         type: entry.spec.type,
@@ -256,7 +331,6 @@ export class GameEngine {
 
   async toggleMotionSteering() {
     const active = await this.motion.toggle();
-    this.input.motionAutoGas = active;
     this.updateMotionButtonsUI();
     return active;
   }
@@ -316,6 +390,10 @@ export class GameEngine {
 
   backToMenu() {
     this.state = 'MENU';
+    if (this.pendingHdRebuild) {
+      this.pendingHdRebuild = false;
+      this.loadCityWorld(this.selectedCityId);
+    }
     this.sound.updateEngine(0, false, false, false);
     this.ui.hud.classList.add('hidden');
     this.ui.countdownOverlay.classList.add('hidden');
@@ -354,6 +432,7 @@ export class GameEngine {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    if (this.composer) this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
   updateCountdown(dt) {
@@ -370,6 +449,7 @@ export class GameEngine {
         this.deskWorld.setGantrySignal('red2');
         this.sound.playBeep(false);
       } else if (beat === 1) {
+        if (this.motion.enabled) this.motion.recenter();
         this.ui.countdownText.textContent = '1';
         this.deskWorld.setGantrySignal('red3');
         this.sound.playBeep(false);
@@ -521,6 +601,13 @@ export class GameEngine {
     if (this.motion.enabled && this.ui.gyroWheelSvg) {
       const deg = this.motion.getVisualWheelDeg();
       this.ui.gyroWheelSvg.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+      if (this.ui.pedalFill) {
+        const pv = this.motion.getPedalValue();
+        const pct = Math.round(Math.abs(pv) * 50);
+        this.ui.pedalFill.style.height = `${pct}%`;
+        this.ui.pedalFill.style.bottom = pv >= 0 ? '50%' : `${50 - pct}%`;
+        this.ui.pedalFill.classList.toggle('brake', pv < 0);
+      }
     }
 
     this.drawMinimap();
@@ -578,15 +665,24 @@ export class GameEngine {
 
   loop() {
     requestAnimationFrame(() => this.loop());
+    if (this.paused) return; // debug: frames are stepped manually via tick()
+    this.tick();
+  }
 
-    const dt = Math.min(this.clock.getDelta(), 0.05);
+  tick(fixedDt = null, render = true) {
+    const dt = fixedDt !== null ? fixedDt : Math.min(this.clock.getDelta(), 0.05);
     this.elapsed += dt;
 
     // Feed live motion sensor steering angle into physics input
-    this.input.analogSteer = this.motion.enabled ? this.motion.steerValue : 0;
+    const motionOn = this.motion.enabled;
+    this.input.analogSteer = motionOn ? this.motion.steerValue : 0;
+    // Hold the car on the grid during the countdown so recentering doesn't launch it
+    const pedalLive = motionOn && this.state === 'RACING';
+    this.input.analogThrottle = pedalLive ? this.motion.throttleValue : 0;
+    this.input.analogBrake = pedalLive ? this.motion.brakeValue : 0;
 
     this.steamTimer -= dt;
-    if (this.steamTimer <= 0 && this.deskWorld) {
+    if (this.steamTimer <= 0 && this.deskWorld && this.deskWorld.mugSteamOrigin) {
       this.steamTimer = 0.22;
       this.particles.emitSteam(this.deskWorld.mugSteamOrigin);
     }
@@ -619,6 +715,8 @@ export class GameEngine {
     this.updateCamera(dt);
     this.updateHUD();
 
-    this.renderer.render(this.scene, this.camera);
+    if (!render) return;
+    if (this.composer) this.composer.render(dt);
+    else this.renderer.render(this.scene, this.camera);
   }
 }

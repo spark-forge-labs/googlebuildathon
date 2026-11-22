@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { isCarModelReady, buildRealCar } from './carModels.js';
 
 export const CAR_CATALOG = [
   {
@@ -68,12 +69,13 @@ export const CAR_CATALOG = [
   },
 ];
 
+// Rival grid in real factory paint colours
 export const AI_COLORS = [
-  { bodyColor: 0xe11d48, accentColor: 0xffffff, type: 'sports', skill: 0.96 },
-  { bodyColor: 0x8b5cf6, accentColor: 0x38bdf8, type: 'sports', skill: 0.93 },
-  { bodyColor: 0x10b981, accentColor: 0xfef08a, type: 'sports', skill: 0.90 },
-  { bodyColor: 0xfacc15, accentColor: 0x111827, type: 'auto', skill: 0.88 },
-  { bodyColor: 0x18181b, accentColor: 0xfacc15, type: 'taxi', skill: 0.86 },
+  { bodyColor: 0xa30d12, accentColor: 0xffffff, type: 'sports', skill: 0.96 }, // rosso corsa
+  { bodyColor: 0xc7ccd1, accentColor: 0x38bdf8, type: 'sports', skill: 0.93 }, // argento silver
+  { bodyColor: 0x0d2a6b, accentColor: 0xfef08a, type: 'sports', skill: 0.9 }, // deep blue
+  { bodyColor: 0xf2c200, accentColor: 0x111827, type: 'sports', skill: 0.88 }, // giallo modena
+  { bodyColor: 0x0b0b0c, accentColor: 0xfacc15, type: 'sports', skill: 0.86 }, // nero black
 ];
 
 function createWheel(radius = 0.44, width = 0.36) {
@@ -108,7 +110,11 @@ function createWheel(radius = 0.44, width = 0.36) {
  * World-class clearcoat vehicle builder facing +Z locally.
  * Separates chassis into `bodyGroup` so physics can apply realistic suspension pitch & roll!
  */
-export function buildVehicleMesh({ bodyColor, accentColor, type = 'sports', isPlayer = false }) {
+export function buildVehicleMesh({ bodyColor, accentColor, type = 'sports', isPlayer = false, lite = false }) {
+  // Real 3D model for sports cars once it has loaded; built-in models otherwise
+  if (type === 'sports' && isCarModelReady()) {
+    return buildRealCar({ bodyColor, isPlayer, lite });
+  }
   const root = new THREE.Group();
   const bodyGroup = new THREE.Group();
   root.add(bodyGroup);
@@ -369,24 +375,6 @@ export function buildVehicleMesh({ bodyColor, accentColor, type = 'sports', isPl
         root.add(wheel);
       }
       wheelMeshes.push(wheel);
-    }
-  }
-
-  // Forward Volumetric-style Headlight Glow Cones on player car for real-time road feel!
-  if (isPlayer) {
-    const beamMat = new THREE.MeshBasicMaterial({
-      color: 0xfff5d1,
-      transparent: true,
-      opacity: 0.12,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    const beamGeo = new THREE.ConeGeometry(1.5, 11.5, 10, 1, true);
-    beamGeo.rotateX(-Math.PI / 2);
-    for (const sx of [-0.68, 0.68]) {
-      const beam = new THREE.Mesh(beamGeo, beamMat);
-      beam.position.set(sx, 0.62, 7.6);
-      bodyGroup.add(beam);
     }
   }
 
