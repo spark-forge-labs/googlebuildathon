@@ -29,12 +29,14 @@ const ui = {
 
   btnCamera: document.getElementById('btn-camera'),
   btnAudio: document.getElementById('btn-audio'),
+  btnMusic: document.getElementById('btn-music'),
   btnReset: document.getElementById('btn-reset'),
   btnMenu: document.getElementById('btn-menu'),
   btnMotionMenu: document.getElementById('btn-motion-menu'),
   btnMotionHud: document.getElementById('btn-motion-hud'),
   motionStatusText: document.getElementById('motion-status-text'),
   pedalFill: document.getElementById('pedal-fill'),
+  tiltReadout: document.getElementById('tilt-readout'),
   gyroWheelHud: document.getElementById('gyro-wheel-hud'),
   gyroWheelSvg: document.getElementById('gyro-wheel-svg'),
   touchSteerArrows: document.getElementById('touch-steer-arrows'),
@@ -111,12 +113,26 @@ renderCitySelector();
 renderCarSelector();
 
 // UI Buttons
-document.getElementById('btn-start-race').addEventListener('click', () => engine.startRace());
-document.getElementById('btn-race-again').addEventListener('click', () => engine.startRace());
+// On phones, starting a race switches tilt controls on automatically (inside the tap, so
+// iOS can show its motion-permission prompt).
+const isTouchDevice = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || navigator.maxTouchPoints > 0;
+function startRaceFromTap() {
+  if (isTouchDevice && !engine.motion.enabled) engine.toggleMotionSteering();
+  engine.startRace();
+}
+document.getElementById('btn-start-race').addEventListener('click', startRaceFromTap);
+document.getElementById('btn-race-again').addEventListener('click', startRaceFromTap);
 document.getElementById('btn-back-menu').addEventListener('click', () => engine.backToMenu());
 
 ui.btnCamera.addEventListener('click', () => engine.cycleCamera());
 ui.btnAudio.addEventListener('click', () => engine.toggleAudio());
+ui.btnMusic.addEventListener('click', () => engine.toggleMusic());
+if (!engine.sound.musicEnabled) ui.btnMusic.textContent = 'MUSIC: OFF';
+
+// Start the menu music on the first interaction (browsers block audio until then)
+const unlockAudio = () => engine.sound.init();
+['pointerdown', 'touchend', 'keydown'].forEach((ev) => window.addEventListener(ev, unlockAudio, { once: true }));
+document.addEventListener('visibilitychange', () => engine.sound.setSuspended(document.hidden));
 ui.btnReset.addEventListener('click', () => engine.resetPlayerCar());
 ui.btnMenu.addEventListener('click', () => engine.backToMenu());
 
@@ -165,6 +181,7 @@ window.addEventListener('keydown', (e) => {
   if (!e.repeat) {
     if (e.code === 'KeyC') engine.cycleCamera();
     if (e.code === 'KeyM') engine.toggleAudio();
+    if (e.code === 'KeyB') engine.toggleMusic();
     if (e.code === 'KeyR') engine.resetPlayerCar();
     if (e.code === 'Enter' && engine.state === 'MENU') engine.startRace();
   }
