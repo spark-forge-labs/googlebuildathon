@@ -1,5 +1,6 @@
 import QRCode from 'qrcode';
 import { CITIES } from './cities.js';
+import { CAR_CATALOG } from './cars.js';
 import { MotionSteeringController } from './motionControls.js';
 
 function detectSmartTV() {
@@ -20,57 +21,11 @@ function detectDeviceLabel() {
 }
 
 /**
- * Loads Google's official Cast Sender SDK cleanly (non-blocking) so Chrome/Edge
- * automatically discovers Chromecast / Google TV devices on the same Wi-Fi!
- */
-let castSdkInitPromise = null;
-function initGoogleCastSDK(onStateChange) {
-  if (castSdkInitPromise) return castSdkInitPromise;
-  castSdkInitPromise = new Promise((resolve) => {
-    if (window.cast && window.cast.framework) {
-      setupCastContext(onStateChange);
-      resolve(true);
-      return;
-    }
-    window.__onGCastApiAvailable = (isAvailable) => {
-      if (isAvailable && window.cast && window.cast.framework) {
-        setupCastContext(onStateChange);
-        resolve(true);
-      } else {
-        resolve(false);
-      }
-    };
-    const script = document.createElement('script');
-    script.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
-    script.async = true;
-    script.onerror = () => resolve(false);
-    document.head.appendChild(script);
-    setTimeout(() => resolve(Boolean(window.cast && window.cast.framework)), 3500);
-  });
-  return castSdkInitPromise;
-}
-
-function setupCastContext(onStateChange) {
-  try {
-    const ctx = window.cast.framework.CastContext.getInstance();
-    ctx.setOptions({
-      receiverApplicationId: window.chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
-      autoJoinPolicy: window.chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
-    });
-    if (onStateChange) {
-      ctx.addEventListener(window.cast.framework.CastContextEventType.CAST_STATE_CHANGED, (ev) => {
-        onStateChange(ev.castState);
-      });
-      onStateChange(ctx.getCastState());
-    }
-  } catch {}
-}
-
-/**
  * Runs on the TV / Desktop screen.
  * - Uses shared LAN room `LIVE` by default so ANY phone on the same Wi-Fi auto-connects without codes!
- * - Auto-discovers real TVs on your Wi-Fi (Chromecast, AirPlay, Samsung, LG, Roku, DIAL, active TV browsers)
- * - Streams live 3D canvas via AirPlay (`webkitShowPlaybackTargetPicker`) / RemotePlayback / Google Cast SDK
+ * - Uses Chrome Desktop's native 1-UA PresentationRequest (renders the live 3D game page directly on the TV,
+ *   NEVER launching Google's blank CC1AD845 media-logo receiver!).
+ * - Auto-discovers real TVs on your Wi-Fi and streams live canvas via Safari AirPlay when on Safari.
  */
 export class TVHostBridge {
   constructor({ onRemoteInput, onRemoteAction, onConnectionChange, onTVsDiscovered }) {
@@ -80,7 +35,6 @@ export class TVHostBridge {
     this.onTVsDiscovered = onTVsDiscovered || (() => {});
 
     const params = new URLSearchParams(window.location.search);
-    // Shared default room "LIVE" enables zero-code auto-pairing across devices on the same Wi-Fi!
     this.roomCode = (params.get('tv') || 'LIVE').toUpperCase();
     this.isSmartTV = params.has('tv') || detectSmartTV();
     this.deviceLabel = detectDeviceLabel();
@@ -102,11 +56,60 @@ export class TVHostBridge {
 
     this._initBroadcastChannel();
     this._initPresentationDefault();
+    this._initPresentationReceiver();
     this._initNetworkAndRelay();
-    initGoogleCastSDK((state) => {
-      this.castState = state;
-      this.onTVsDiscovered(this.discoveredTVs, this.activeHosts, this.castState);
-    });
+  }
+
+  _initPresentationReceiver() {
+    if (!navigator.presentation || !navigator.presentation.receiver) return;
+    navigator.presentation.receiver.connectionList
+      .then((list) => {
+        const attach = (conn) => {
+          conn.onmessage = (ev) => {
+            try {
+              const msg = JSON.parse(ev.data);
+              if (msg.type === 'input') {
+                this.onRemoteInput(msg);
+              } else if (msg.type === 'action') {
+                this.onRemoteAction(msg.action, msg.value);
+              }
+            } catch {}
+          };
+        };
+        list.connections.forEach(attach);
+        list.onconnectionavailable = (ev) => attach(ev.connection);
+      })
+      .catch(() => {});
+  }
+
+  /** True when this Mac/Desktop browser is casting to a TV tab or a Smart TV browser is live on Wi-Fi. */
+  isControllingExternalTV() {
+    if (this.isSmartTV) return false;
+    if (this.presentationConnection && this.presentationConnection.state === 'connected') return true;
+    return this.activeHosts.some((h) => h.isSmartTV);
+  }
+
+  /** Forward Mac keyboard / Start Race / City / Car actions straight to the TV screen! */
+  forwardToTV(payload) {
+    if (this.isSmartTV) return;
+    const str = JSON.stringify(payload);
+    if (this.presentationConnection && this.presentationConnection.state === 'connected') {
+      try {
+        this.presentationConnection.send(str);
+      } catch {}
+    }
+    if (this.bc) {
+      try {
+        this.bc.postMessage(payload);
+      } catch {}
+    }
+    if (this.relayAvailable) {
+      fetch(`/api/relay/send?room=${encodeURIComponent(this.roomCode)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: str,
+      }).catch(() => {});
+    }
   }
 
   _initPresentationDefault() {
@@ -133,20 +136,24 @@ export class TVHostBridge {
    */
   async showTVCornerQR() {
     if (!this.isSmartTV || document.getElementById('tv-corner-qr')) return;
+    // On the TV display itself, hide the desktop form overlay so the full 3D circuit shines in 4K!
+    const startOverlay = document.getElementById('start-overlay');
+    if (startOverlay) startOverlay.classList.add('hidden');
+
     const badge = document.createElement('div');
     badge.id = 'tv-corner-qr';
     badge.className = 'tv-corner-qr';
     badge.innerHTML = `
-      <canvas id="tv-corner-qr-canvas" width="96" height="96"></canvas>
+      <canvas id="tv-corner-qr-canvas" width="112" height="112"></canvas>
       <div class="tv-corner-text">
         <strong>PLAY WITH PHONE</strong>
-        <span>Scan to steer</span>
+        <span>Scan to steer &amp; start race</span>
       </div>
     `;
     document.body.appendChild(badge);
     const qrCanvas = document.getElementById('tv-corner-qr-canvas');
     await QRCode.toCanvas(qrCanvas, this.getControllerUrl(), {
-      width: 96,
+      width: 112,
       margin: 1,
       color: { dark: '#0c1220', light: '#ffffff' },
     });
@@ -363,29 +370,19 @@ export class TVHostBridge {
   }
 
   async _fallbackCastAfterSync(prevErr) {
-    // Fallback to Google Cast SDK if PresentationRequest wasn't supported
-    if (window.cast && window.cast.framework && this.castState !== 'NO_DEVICES_AVAILABLE') {
-      try {
-        await window.cast.framework.CastContext.getInstance().requestSession();
-        return { mode: 'chromecast', launched: true, message: 'Connected to your TV via Google Cast!' };
-      } catch (err) {
-        if (err === 'cancel') return { mode: 'cancel', launched: false, message: 'Cast picker closed.' };
-      }
-    }
-
     const tvUrl = this.getTVUrl();
     const targetTv = this.discoveredTVs[0];
     if (targetTv) {
       return {
         mode: 'guide',
         launched: false,
-        message: `Found ${targetTv.name} on Wi-Fi${prevErr?.name ? ` (${prevErr.name})` : ''}. In Chrome click ⋮ → Cast, Save and Share → Cast → pick "${targetTv.name}", OR open ${tvUrl} on the TV browser.`,
+        message: `Found ${targetTv.name} on Wi-Fi${prevErr?.name ? ` (${prevErr.name})` : ''}. In Chrome click ⋮ → Cast, Save and Share → Cast → Sources → "Cast tab" → pick "${targetTv.name}"!`,
       };
     }
     return {
       mode: 'guide',
       launched: false,
-      message: `In Chrome click ⋮ → Cast, Save and Share → Cast → pick your TV, or open ${tvUrl} on your Smart TV browser.`,
+      message: `In Chrome click ⋮ → Cast, Save and Share → Cast → Sources → "Cast tab" → pick your TV, or open ${tvUrl} on your Smart TV browser.`,
     };
   }
 
@@ -420,21 +417,39 @@ export async function checkActiveTVOnWifi() {
  */
 export function launchPhoneControllerMode(roomCode = 'AUTO') {
   const code = (roomCode || 'AUTO').toUpperCase();
-  document.title = `Steering Wheel • TV Controller`;
+  document.title = `Motion Remote • TV Controller`;
+
+  const needsIosTap =
+    typeof DeviceOrientationEvent !== 'undefined' &&
+    typeof DeviceOrientationEvent.requestPermission === 'function';
+  const isSecure = typeof window === 'undefined' || window.isSecureContext !== false;
 
   document.getElementById('game-root').innerHTML = `
     <div class="phone-pad-root">
+      <!-- One-tap motion sensor activation overlay when paired on HTTPS mobile -->
+      <div id="pad-motion-prompt" class="pad-motion-prompt ${!isSecure ? 'hidden' : ''}">
+        <div class="pad-prompt-card">
+          <div class="pad-prompt-badge">PAIRED WITH TV • MOTION REMOTE</div>
+          <h2>HOLD PHONE LIKE A STEERING WHEEL</h2>
+          <p>Rotate left/right to steer • Tilt forward for gas • Tilt back to brake</p>
+          <button id="pad-enable-motion-btn" class="primary-btn">ACTIVATE MOTION REMOTE</button>
+          <button id="pad-skip-motion-btn" class="pad-skip-btn">Use Touch Controls Instead</button>
+        </div>
+      </div>
+
       <div class="pad-header">
         <div class="pad-brand">
           <span class="pad-dot" id="pad-conn-dot"></span>
-          <span class="pad-title">INDIA GP • WIRELESS WHEEL</span>
-          <span class="pad-room" id="pad-room-badge">CONNECTING TO TV...</span>
+          <span class="pad-title">TV MOTION REMOTE</span>
+          <span class="pad-room" id="pad-room-badge">CONNECTING TO TV…</span>
         </div>
         <div class="pad-actions">
-          <button id="pad-gyro-btn" class="pad-chip">GYRO: OFF</button>
+          <button id="pad-gyro-btn" class="pad-chip">MOTION: OFF</button>
           <button id="pad-recenter-btn" class="pad-chip">CENTER</button>
           <button id="pad-cam-btn" class="pad-chip">CAM</button>
+          <button id="pad-music-btn" class="pad-chip">MUSIC</button>
           <button id="pad-reset-btn" class="pad-chip">RESET</button>
+          <button id="pad-menu-btn" class="pad-chip">TV MENU</button>
         </div>
       </div>
 
@@ -453,28 +468,41 @@ export function launchPhoneControllerMode(roomCode = 'AUTO') {
         </div>
 
         <div class="pad-wheel-zone" id="pad-wheel-zone">
-          <div class="wheel-hint" id="pad-wheel-hint">DRAG WHEEL OR TAP GYRO TO TILT</div>
-          <svg id="pad-wheel-svg" class="pad-wheel-svg" viewBox="0 0 200 200">
-            <defs>
-              <linearGradient id="rimGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stop-color="#334155"/>
-                <stop offset="50%" stop-color="#1e293b"/>
-                <stop offset="100%" stop-color="#0f172a"/>
-              </linearGradient>
-            </defs>
-            <circle cx="100" cy="100" r="84" fill="none" stroke="url(#rimGrad)" stroke-width="20"/>
-            <circle cx="100" cy="100" r="84" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
-            <rect x="93" y="6" width="14" height="20" rx="4" fill="#ff8c2b"/>
-            <line x1="100" y1="28" x2="100" y2="82" stroke="#475569" stroke-width="12" stroke-linecap="round"/>
-            <line x1="28" y1="126" x2="82" y2="108" stroke="#475569" stroke-width="14" stroke-linecap="round"/>
-            <line x1="172" y1="126" x2="118" y2="108" stroke="#475569" stroke-width="14" stroke-linecap="round"/>
-            <circle cx="100" cy="100" r="24" fill="#0f172a" stroke="#f7c948" stroke-width="4"/>
-            <text x="100" y="105" text-anchor="middle" fill="#f7c948" font-size="13" font-weight="900">GP</text>
-          </svg>
+          <div class="wheel-hint" id="pad-wheel-hint">${isSecure ? 'ROTATE PHONE TO STEER • TILT AWAY = GAS' : 'HTTPS NEEDED FOR GYRO (USE npm run dev:phone) — DRAG WHEEL OR TAP ◀ ▶'}</div>
+          <div class="pad-wheel-row">
+            <button id="pad-left" class="steer-tap-btn" aria-label="Steer Left">◀</button>
+            <svg id="pad-wheel-svg" class="pad-wheel-svg" viewBox="0 0 200 200">
+              <defs>
+                <linearGradient id="rimGrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#334155"/>
+                  <stop offset="50%" stop-color="#1e293b"/>
+                  <stop offset="100%" stop-color="#0f172a"/>
+                </linearGradient>
+              </defs>
+              <circle cx="100" cy="100" r="84" fill="none" stroke="url(#rimGrad)" stroke-width="20"/>
+              <circle cx="100" cy="100" r="84" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
+              <rect x="93" y="6" width="14" height="20" rx="4" fill="#ff8c2b"/>
+              <line x1="100" y1="28" x2="100" y2="82" stroke="#475569" stroke-width="12" stroke-linecap="round"/>
+              <line x1="28" y1="126" x2="82" y2="108" stroke="#475569" stroke-width="14" stroke-linecap="round"/>
+              <line x1="172" y1="126" x2="118" y2="108" stroke="#475569" stroke-width="14" stroke-linecap="round"/>
+              <circle cx="100" cy="100" r="24" fill="#0f172a" stroke="#f7c948" stroke-width="4"/>
+              <text x="100" y="105" text-anchor="middle" fill="#f7c948" font-size="13" font-weight="900">GP</text>
+            </svg>
+            <!-- Live Motion Tilt Gas / Brake Gauge -->
+            <div class="pad-tilt-meter" title="Tilt forward = Gas, tilt back = Brake">
+              <span class="tm-lbl gas">G</span>
+              <div class="tm-track"><div id="pad-tilt-fill" class="tm-fill"></div><div class="tm-mid"></div></div>
+              <span class="tm-lbl brk">B</span>
+            </div>
+            <button id="pad-right" class="steer-tap-btn" aria-label="Steer Right">▶</button>
+          </div>
           <div class="pad-quick-row">
-            <button id="pad-start-btn" class="pad-start-btn">START / RESTART RACE</button>
+            <button id="pad-start-btn" class="pad-start-btn">START / RESTART</button>
             <select id="pad-city-select" class="pad-city-select" aria-label="Select City">
               ${CITIES.map((c) => `<option value="${c.id}">${c.name}${c.nativeName && c.nativeName !== c.name ? ` (${c.nativeName})` : ''}</option>`).join('')}
+            </select>
+            <select id="pad-car-select" class="pad-city-select" aria-label="Select Car">
+              ${CAR_CATALOG.map((c) => `<option value="${c.id}">${c.name}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -488,13 +516,15 @@ export function launchPhoneControllerMode(roomCode = 'AUTO') {
   `;
 
   let activeRoom = code;
-  const state = { up: false, down: false, drift: false, boost: false, touchSteer: 0 };
+  const state = { up: false, down: false, left: false, right: false, drift: false, boost: false, touchSteer: 0 };
 
   const connDot = document.getElementById('pad-conn-dot');
   const roomBadge = document.getElementById('pad-room-badge');
   const wheelSvg = document.getElementById('pad-wheel-svg');
   const wheelHint = document.getElementById('pad-wheel-hint');
   const gyroBtn = document.getElementById('pad-gyro-btn');
+  const tiltFill = document.getElementById('pad-tilt-fill');
+  const motionPrompt = document.getElementById('pad-motion-prompt');
 
   let bc = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(`india-desk-gp-${activeRoom === 'AUTO' ? 'LIVE' : activeRoom}`) : null;
   if (bc) bc.postMessage({ type: 'phone_join' });
@@ -539,10 +569,27 @@ export function launchPhoneControllerMode(roomCode = 'AUTO') {
 
   const motion = new MotionSteeringController({
     onStatusChange: (status, msg) => {
-      gyroBtn.textContent = motion.enabled ? 'GYRO: ON' : 'GYRO: OFF';
+      gyroBtn.textContent = motion.enabled ? 'MOTION: ON' : 'MOTION: OFF';
       gyroBtn.classList.toggle('active', motion.enabled);
       wheelHint.textContent = msg;
+      if (motion.enabled && motionPrompt) motionPrompt.classList.add('hidden');
     },
+  });
+
+  // Auto-start motion sensing immediately on Android/HTTPS devices that don't require an iOS tap!
+  if (isSecure && !needsIosTap) {
+    motion.enable().then((ok) => {
+      if (ok && motionPrompt) motionPrompt.classList.add('hidden');
+    });
+  }
+
+  document.getElementById('pad-enable-motion-btn')?.addEventListener('click', async () => {
+    await motion.enable();
+    motion.recenter();
+    if (motionPrompt) motionPrompt.classList.add('hidden');
+  });
+  document.getElementById('pad-skip-motion-btn')?.addEventListener('click', () => {
+    if (motionPrompt) motionPrompt.classList.add('hidden');
   });
 
   gyroBtn.addEventListener('click', () => motion.toggle());
@@ -561,7 +608,11 @@ export function launchPhoneControllerMode(roomCode = 'AUTO') {
   };
   const onDragEnd = () => { dragging = false; state.touchSteer = 0; };
 
-  wheelSvg.addEventListener('touchstart', (e) => { e.preventDefault(); onDragStart(e.touches[0].clientX); }, { passive: false });
+  wheelZone.addEventListener('touchstart', (e) => {
+    if (e.target.closest('button, select')) return;
+    e.preventDefault();
+    onDragStart(e.touches[0].clientX);
+  }, { passive: false });
   wheelZone.addEventListener('touchmove', (e) => { if (dragging) { e.preventDefault(); onDragMove(e.touches[0].clientX); } }, { passive: false });
   window.addEventListener('touchend', onDragEnd);
   window.addEventListener('touchcancel', onDragEnd);
@@ -571,6 +622,7 @@ export function launchPhoneControllerMode(roomCode = 'AUTO') {
 
   function bindPedal(id, field, vibrateMs = 15) {
     const el = document.getElementById(id);
+    if (!el) return;
     const press = (e) => {
       e.preventDefault();
       state[field] = true;
@@ -591,6 +643,8 @@ export function launchPhoneControllerMode(roomCode = 'AUTO') {
     el.addEventListener('mouseup', release);
     el.addEventListener('mouseleave', release);
   }
+  bindPedal('pad-left', 'left', 10);
+  bindPedal('pad-right', 'right', 10);
   bindPedal('pad-gas', 'up', 12);
   bindPedal('pad-brake', 'down', 18);
   bindPedal('pad-drift', 'drift', 20);
@@ -607,22 +661,47 @@ export function launchPhoneControllerMode(roomCode = 'AUTO') {
     }).catch(() => {});
   }
 
-  document.getElementById('pad-start-btn').addEventListener('click', () => sendAction('start_race'));
+  document.getElementById('pad-start-btn').addEventListener('click', () => {
+    if (motion.enabled) motion.recenter();
+    sendAction('start_race');
+  });
   document.getElementById('pad-cam-btn').addEventListener('click', () => sendAction('cycle_camera'));
+  document.getElementById('pad-music-btn')?.addEventListener('click', () => sendAction('toggle_music'));
+  document.getElementById('pad-menu-btn')?.addEventListener('click', () => sendAction('back_menu'));
   document.getElementById('pad-reset-btn').addEventListener('click', () => sendAction('reset_car'));
   document.getElementById('pad-city-select').addEventListener('change', (e) => sendAction('select_city', e.target.value));
+  document.getElementById('pad-car-select')?.addEventListener('change', (e) => sendAction('select_car', e.target.value));
 
   let lastPayloadStr = '';
   function pushInput() {
-    const steer = Math.abs(state.touchSteer) > 0.02 ? state.touchSteer : motion.enabled ? motion.steerValue : 0;
+    const tapSteer = (state.left ? 1 : 0) - (state.right ? 1 : 0);
+    const steer =
+      tapSteer !== 0
+        ? tapSteer
+        : Math.abs(state.touchSteer) > 0.02
+          ? state.touchSteer
+          : motion.enabled
+            ? motion.steerValue
+            : 0;
     wheelSvg.style.transform = `rotate(${(-steer * 85).toFixed(1)}deg)`;
+
+    const throttle = state.up ? 1 : motion.enabled ? Number((motion.throttleValue || 0).toFixed(3)) : 0;
+    const brake = state.down ? 1 : motion.enabled ? Number((motion.brakeValue || 0).toFixed(3)) : 0;
+
+    if (tiltFill) {
+      const pv = throttle > 0 ? throttle : -brake;
+      const pct = Math.round(Math.abs(pv) * 50);
+      tiltFill.style.height = `${pct}%`;
+      tiltFill.style.bottom = pv >= 0 ? '50%' : `${50 - pct}%`;
+      tiltFill.classList.toggle('brake', pv < 0);
+    }
 
     const payload = {
       type: 'input',
       up: state.up,
       down: state.down,
-      throttle: state.up ? 1 : motion.enabled ? Number((motion.throttleValue || 0).toFixed(3)) : 0,
-      brake: state.down ? 1 : motion.enabled ? Number((motion.brakeValue || 0).toFixed(3)) : 0,
+      throttle,
+      brake,
       drift: state.drift,
       boost: state.boost,
       steer: Number(steer.toFixed(3)),

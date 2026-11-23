@@ -327,10 +327,33 @@ function renderDiscoveredTVs(tvs = [], activeHosts = [], castState = '') {
   }
 }
 
+let autoCastPillShown = false;
+function showAutoDetectedTVBanner(tv) {
+  if (autoCastPillShown || engine.tvHost.isSmartTV || isTouchDevice) return;
+  autoCastPillShown = true;
+  const pill = document.createElement('div');
+  pill.id = 'auto-tv-pill';
+  pill.className = 'wifi-tv-banner';
+  pill.innerHTML = `
+    <span>📺 <strong>${tv.name}</strong> detected on your Wi-Fi</span>
+    <button id="btn-pill-cast-now">CAST TO TV</button>
+    <button id="btn-pill-dismiss" class="pill-x" aria-label="Dismiss">✕</button>
+  `;
+  document.body.appendChild(pill);
+  pill.querySelector('#btn-pill-cast-now').addEventListener('click', () => {
+    pill.remove();
+    openCastModalAndAutoCast();
+  });
+  pill.querySelector('#btn-pill-dismiss').addEventListener('click', () => pill.remove());
+}
+
 engine.onTVsUpdated = (tvs, activeHosts, castState) => {
   renderDiscoveredTVs(tvs, activeHosts, castState);
-  if (castStatusMsg && tvs.length > 0) {
-    castStatusMsg.textContent = `Found ${tvs.length} TV${tvs.length > 1 ? 's' : ''} on your Wi-Fi! Tap CONNECT.`;
+  if (tvs.length > 0) {
+    showAutoDetectedTVBanner(tvs[0]);
+    if (castStatusMsg) {
+      castStatusMsg.textContent = `Found ${tvs.length} TV${tvs.length > 1 ? 's' : ''} on your Wi-Fi! Tap CONNECT.`;
+    }
   }
 };
 
@@ -425,10 +448,13 @@ document.getElementById('btn-test-controller')?.addEventListener('click', () => 
   window.open(`${window.location.origin}/?controller=${engine.tvHost.roomCode}`, '_blank');
 });
 
-// Sync city selector UI if the user changes the city remotely from their phone!
+// Sync city & car selector UI if changed remotely from the phone!
 engine.onCityChangedExternal = () => {
   activeRegion = getCityById(engine.selectedCityId).region || 'india';
   renderCitySelector();
+};
+engine.onCarChangedExternal = () => {
+  renderCarSelector();
 };
 
 // ---------- Settings overlay ----------
