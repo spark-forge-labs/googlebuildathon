@@ -20,7 +20,7 @@ export function mergeStaticMeshes(root, exclude = new Set(), opts = {}) {
   let before = 0;
 
   const skip = (o) => {
-    for (let p = o; p && p !== root; p = p.parent) if (exclude.has(p)) return true;
+    for (let p = o; p && p !== root; p = p.parent) if (exclude.has(p) || p.userData.noMerge) return true;
     return false;
   };
   const mergeable = (m) =>
@@ -135,6 +135,8 @@ function materialSignature(m) {
     (m.metalness ?? 0).toFixed(3),
     (m.envMapIntensity ?? 1).toFixed(2),
     m.map ? m.map.uuid : '',
+    m.emissiveMap ? m.emissiveMap.uuid : '',
+    m.isShaderMaterial ? m.uuid : '',
     m.normalMap ? m.normalMap.uuid : '',
     m.roughnessMap ? m.roughnessMap.uuid : '',
     m.bumpMap ? m.bumpMap.uuid : '',

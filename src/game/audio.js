@@ -253,6 +253,52 @@ export class SoundEngine {
     osc.stop(now + 0.15);
   }
 
+  /** Big crash: deep thump, crunching bodywork, scraping metal and a scatter of debris. */
+  playCrash(intensity = 1) {
+    if (!this.initialized || !this.enabled || !this.ctx) return;
+    const c = this.ctx;
+    const now = c.currentTime;
+    const len = Math.floor(c.sampleRate * 1.2);
+    const buf = c.createBuffer(1, len, c.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const burst = (t, type, freq, q, peak, decay) => {
+      const src = c.createBufferSource();
+      src.buffer = buf;
+      const f = c.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = freq;
+      f.Q.value = q;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(peak, t + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+      src.connect(f).connect(g).connect(this.master);
+      src.start(t, Math.random() * 0.3);
+      src.stop(t + decay + 0.05);
+    };
+    const k = Math.min(1, intensity);
+    // the impact
+    const o = c.createOscillator();
+    const og = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(110, now);
+    o.frequency.exponentialRampToValueAtTime(32, now + 0.35);
+    og.gain.setValueAtTime(0.7 * k, now);
+    og.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
+    o.connect(og).connect(this.master);
+    o.start(now);
+    o.stop(now + 0.65);
+    burst(now, 'lowpass', 900, 0.7, 0.6 * k, 0.5);
+    burst(now + 0.01, 'bandpass', 2200, 1.4, 0.35 * k, 0.35); // crunch
+    // tumbling scrapes and bits hitting the road
+    for (let i = 0; i < 7; i++) {
+      const t = now + 0.15 + i * (0.09 + Math.random() * 0.12);
+      burst(t, 'bandpass', 1400 + Math.random() * 3000, 3, 0.16 * k * (1 - i / 9), 0.12 + Math.random() * 0.2);
+    }
+    burst(now + 0.05, 'highpass', 6500, 0.8, 0.12 * k, 0.6); // glass and carbon shards
+  }
+
   playFanfare() {
     if (!this.initialized || !this.enabled || !this.ctx) return;
     [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {

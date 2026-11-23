@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildVegasLandmarks } from './vegasLandmarks.js';
 import { addWaterBasin, addTowerSkyscraper } from './cityLandmarks.js';
 import {
   mat, stone, glass, gold, finish, box, cyl, cone, sphere, strut, lathe, plaza, lawn, gableRoof, prism,
@@ -49,6 +50,8 @@ export function buildWorldLandmarks2(city, group, animTargets, addCol) {
       buildMahanakhon(group, 78, -52);
       addCol(78, -52, 16);
       return true;
+    case 'lasvegas':
+      return buildVegasLandmarks(group, animTargets, addCol);
     default:
       return false;
   }

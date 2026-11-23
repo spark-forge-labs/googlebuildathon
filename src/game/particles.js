@@ -25,6 +25,7 @@ export class ParticleSystem {
         gravity: 0,
         startScale: 1,
         startOpacity: 0.8,
+        bounce: false,
       });
     }
     this.cursor = 0;
@@ -84,7 +85,7 @@ export class ParticleSystem {
     }
   }
 
-  spawn({ pos, vel, color = 0xffffff, scale = 0.7, grow = 1.6, life = 0.55, gravity = 0, opacity = 0.75 }) {
+  spawn({ pos, vel, color = 0xffffff, scale = 0.7, grow = 1.6, life = 0.55, gravity = 0, opacity = 0.75, bounce = false, floorY = 0.12 }) {
     const p = this.pool[this.cursor];
     this.cursor = (this.cursor + 1) % this.pool.length;
 
@@ -96,6 +97,8 @@ export class ParticleSystem {
     p.gravity = gravity;
     p.startScale = scale;
     p.startOpacity = opacity;
+    p.bounce = bounce;
+    p.floorY = floorY;
 
     p.mesh.visible = true;
     p.mesh.position.copy(pos);
@@ -153,6 +156,64 @@ export class ParticleSystem {
     }
   }
 
+  /** Titanium skid-block sparks: a short bright streak thrown back and bouncing off the asphalt. */
+  emitFloorSparks(pos, carVel, count = 6) {
+    for (let i = 0; i < count; i++) {
+      this.spawn({
+        pos,
+        vel: new THREE.Vector3(
+          carVel.x * (0.45 + Math.random() * 0.3) + (Math.random() - 0.5) * 3,
+          0.6 + Math.random() * 2.4,
+          carVel.z * (0.45 + Math.random() * 0.3) + (Math.random() - 0.5) * 3
+        ),
+        color: Math.random() > 0.4 ? 0xfff2b8 : 0xffa53a,
+        scale: 0.15 + Math.random() * 0.08,
+        grow: 0.05,
+        life: 0.22 + Math.random() * 0.2,
+        gravity: -16,
+        opacity: 1,
+        bounce: true,
+        floorY: pos.y,
+      });
+    }
+  }
+
+  /** Bodywork shards thrown out of a crash. */
+  emitDebris(pos, carVel, count = 20) {
+    const cols = [0x1a1a1a, 0x2b2b2b, 0x444444, 0x7a0f0f, 0xb0b0b0];
+    for (let i = 0; i < count; i++) {
+      this.spawn({
+        pos: pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.6, 0.5 + Math.random() * 0.8, (Math.random() - 0.5) * 1.6)),
+        vel: new THREE.Vector3(
+          carVel.x * (0.3 + Math.random() * 0.5) + (Math.random() - 0.5) * 14,
+          4 + Math.random() * 9,
+          carVel.z * (0.3 + Math.random() * 0.5) + (Math.random() - 0.5) * 14
+        ),
+        color: cols[(Math.random() * cols.length) | 0],
+        scale: 0.12 + Math.random() * 0.28,
+        grow: 1,
+        life: 1.6 + Math.random() * 1.4,
+        gravity: -24,
+        opacity: 1,
+        bounce: true,
+      });
+    }
+  }
+
+  /** Grass and dirt kicked up when a car slides off the track. */
+  emitDust(pos, carVel) {
+    this.spawn({
+      pos: pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2, 0.3, (Math.random() - 0.5) * 2)),
+      vel: new THREE.Vector3(carVel.x * 0.15 + (Math.random() - 0.5) * 2, 1.2 + Math.random() * 1.6, carVel.z * 0.15 + (Math.random() - 0.5) * 2),
+      color: Math.random() < 0.5 ? 0x8a7a55 : 0x6b7a45,
+      scale: 0.6 + Math.random() * 0.5,
+      grow: 3.2,
+      life: 1.1 + Math.random() * 0.6,
+      gravity: -0.6,
+      opacity: 0.5,
+    });
+  }
+
   emitSteam(pos) {
     this.spawn({
       pos: pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3.5, 0, (Math.random() - 0.5) * 3.5)),
@@ -194,6 +255,13 @@ export class ParticleSystem {
       const t = p.life / p.maxLife;
       p.vel.y += p.gravity * dt;
       p.mesh.position.addScaledVector(p.vel, dt);
+      if (p.bounce && p.mesh.position.y < p.floorY && p.vel.y < 0) {
+        // carbon-fibre shards skitter along the asphalt
+        p.mesh.position.y = p.floorY;
+        p.vel.y *= -0.32;
+        p.vel.x *= 0.62;
+        p.vel.z *= 0.62;
+      }
       p.mesh.rotation.x += dt * 4;
       p.mesh.rotation.y += dt * 3;
       p.mesh.scale.setScalar(THREE.MathUtils.lerp(p.startScale, p.startScale * p.grow, t));

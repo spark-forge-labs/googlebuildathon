@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildCityBridge, buildCityLandmarks } from './cityLandmarks.js';
-import { buildRealWorld, updateTreeWind, weatherLandmarkMaterials } from './realWorld.js';
+import { buildRealWorld, updateTreeWind, weatherLandmarkMaterials, crowdClock } from './realWorld.js';
+import { applyNightCity, buildFloodlights, nightClock } from './nightCity.js';
 import { mergeStaticMeshes } from './staticMerge.js';
 
 export const DESK_HALF_W = 110;
@@ -88,6 +89,7 @@ function createSignTexture(title, subtitle, bg = '#0f203c', accent = '#f7c948', 
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.userData.nightGlow = 1.1; // backlit billboard at night races
   return tex;
 }
 
@@ -254,6 +256,7 @@ export class DeskWorld {
     this.bridgeCables = [];
     this.waterMeshes = [];
     this.rotatingBeacons = [];
+    this.animated = []; // objects with userData.animate(time, dt)
     this.gantryLights = [];
     // Real-world mode: no desk, no mug steam
     this.mugSteamOrigin = null;
@@ -263,6 +266,7 @@ export class DeskWorld {
       bridgeCables: this.bridgeCables,
       waterMeshes: this.waterMeshes,
       rotatingBeacons: this.rotatingBeacons,
+      animated: this.animated,
     };
     buildCityBridge(city, track, this.group, animTargets);
     const cityColliders = buildCityLandmarks(city, this.group, animTargets);
@@ -278,12 +282,18 @@ export class DeskWorld {
     }
     const realAnim = buildRealWorld(this.group, city, track, avoid);
     this.waterMeshes.push(...realAnim.water);
+    this.stands = realAnim.stands || [];
 
     this.buildStartGantryAndBillboards();
     this.buildStreetLampsAndTrees();
+    if (city.night) {
+      // floodlit night race: light masts, lit windows, glowing signs
+      buildFloodlights(this.group, track, (p, pad) => this.inStand(p, pad));
+      applyNightCity(this.group);
+    }
 
     // Bake static landmark/bridge/street meshes into a few draw calls (animated parts stay separate)
-    const dynamic = new Set([...this.waterMeshes, ...this.rotatingBeacons, ...this.gantryLights]);
+    const dynamic = new Set([...this.waterMeshes, ...this.rotatingBeacons, ...this.gantryLights, ...this.animated]);
     for (const c of this.bridgeCables) dynamic.add(c.mesh);
     this.mergeStats = mergeStaticMeshes(this.group, dynamic);
   }
@@ -640,12 +650,22 @@ export class DeskWorld {
     const basis = new THREE.Matrix4().makeBasis(gantryX, new THREE.Vector3(0, 1, 0), gantryZ);
     gantry.quaternion.setFromRotationMatrix(basis);
 
-    const trussMat = new THREE.MeshStandardMaterial({ color: 0x263042, roughness: 0.38, metalness: 0.78 });
-    for (const sx of [-9.4, 9.4]) {
-      const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 11.4, 1.1), trussMat);
-      pillar.position.set(sx, 5.7, 0);
+    // Grand-prix start gantry: legs beyond the barriers, a long overhead beam in the
+    // city's colours, and the five-column start-light cluster hanging over the grid.
+    const trussMat = new THREE.MeshStandardMaterial({ color: 0x1d2330, roughness: 0.38, metalness: 0.78 });
+    const span = 13.4;
+    for (const sx of [-span, span]) {
+      const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 11.6, 1.2), trussMat);
+      pillar.position.set(sx, 5.8, 0);
       pillar.castShadow = true;
       gantry.add(pillar);
+      // lattice bracing on the legs
+      for (let y = 1.5; y < 10; y += 2.2) {
+        const brace = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.6, 0.12), trussMat);
+        brace.position.set(sx, y + 1.1, 0.62);
+        brace.rotation.z = (y / 2.2) % 2 < 1 ? 0.5 : -0.5;
+        gantry.add(brace);
+      }
     }
 
     const bannerTex = createSignTexture(
@@ -662,30 +682,57 @@ export class DeskWorld {
       roughness: 0.4,
     });
     const banner = new THREE.Mesh(
-      new THREE.BoxGeometry(19.8, 3.6, 0.9),
+      new THREE.BoxGeometry(span * 2 + 1.2, 3.4, 0.9),
       [trussMat, trussMat, trussMat, trussMat, bannerMat, bannerMat]
     );
-    banner.position.set(0, 9.8, 0);
+    banner.position.set(0, 10.1, 0);
     banner.castShadow = true;
     gantry.add(banner);
+    const accent = new THREE.MeshStandardMaterial({ color: this.city.accentHex, roughness: 0.45, emissive: this.city.accentHex, emissiveIntensity: 0.25 });
+    for (const y of [8.3, 11.9]) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(span * 2 + 1.2, 0.22, 0.95), accent);
+      stripe.position.set(0, y, 0);
+      gantry.add(stripe);
+    }
 
-    for (let i = 0; i < 4; i++) {
-      const lightMat = new THREE.MeshStandardMaterial({
-        color: 0x222222,
-        emissive: 0x220000,
-        emissiveIntensity: 1.5,
-      });
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.46, 12, 12), lightMat);
-      lamp.position.set(-3.6 + i * 2.4, 7.6, -0.5);
-      gantry.add(lamp);
+    // Start lights: five black columns, two red lamps each (all go dark for the start)
+    const housing = new THREE.MeshStandardMaterial({ color: 0x0b0d10, roughness: 0.5, metalness: 0.4 });
+    const lampGeo = new THREE.CylinderGeometry(0.26, 0.26, 0.12, 16);
+    lampGeo.rotateX(Math.PI / 2);
+    const cluster = new THREE.Group();
+    cluster.position.set(0, 7.35, -0.5);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.35, 0.7), housing);
+    head.position.y = 0.95;
+    cluster.add(head);
+    for (let i = 0; i < 5; i++) {
+      const x = -2.2 + i * 1.1;
+      const col = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.7, 0.55), housing);
+      col.position.set(x, 0, 0);
+      cluster.add(col);
+      const lightMat = new THREE.MeshStandardMaterial({ color: 0x222630, emissive: 0x111111, emissiveIntensity: 0.2 });
+      for (const y of [0.38, -0.38]) {
+        const lamp = new THREE.Mesh(lampGeo, lightMat);
+        lamp.position.set(x, y, -0.3);
+        cluster.add(lamp);
+      }
       this.gantryLights.push(lightMat);
     }
+    // race-control box beside the lights (fictional governing body)
+    const rcTex = createSignTexture('RACE', 'CONTROL', '#f8fafc', '#0d1b33');
+    const rc = new THREE.Mesh(
+      new THREE.BoxGeometry(1.8, 1.2, 0.5),
+      [housing, housing, housing, housing, new THREE.MeshStandardMaterial({ map: rcTex, roughness: 0.5 }), housing]
+    );
+    rc.position.set(3.9, 0.15, 0);
+    cluster.add(rc);
+    gantry.add(cluster);
     this.group.add(gantry);
 
     const postMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.75 });
     for (const b of this.city.billboards) {
       const f = this.track.getFrameAt(b.u);
-      const pos = f.point.clone().addScaledVector(f.right, b.side * 12.2);
+      let pos = f.point.clone().addScaledVector(f.right, b.side * 15.6);
+      if (this.inStand(pos, 4)) pos = f.point.clone().addScaledVector(f.right, -b.side * 15.6); // other side of the road
       const boardGroup = new THREE.Group();
       boardGroup.position.set(pos.x, 0, pos.z);
       const lookTarget = f.point.clone().addScaledVector(f.tangent, -10);
@@ -710,12 +757,18 @@ export class DeskWorld {
     }
   }
 
+  /** True when a point falls on a grandstand (signs and lamps keep out of the fans' view). */
+  inStand(p, pad = 0) {
+    return (this.stands || []).some((st) => (st.x - p.x) ** 2 + (st.z - p.z) ** 2 < (st.r + pad) ** 2);
+  }
+
   buildStreetLampsAndTrees() {
     // Trees now come from EZ-Tree in realWorld.js. Real street lights: tapered
     // galvanised pole, curved outreach arm and a flat LED luminaire head.
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x9ea3a8, roughness: 0.45, metalness: 0.85 });
     const headMat = new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.5, metalness: 0.6 });
     const lensMat = new THREE.MeshStandardMaterial({ color: 0xf4f1e6, roughness: 0.2, emissive: 0xfff3d6, emissiveIntensity: 0.15 });
+    lensMat.userData.nightLamp = 3.4;
     const poleGeo = new THREE.CylinderGeometry(0.09, 0.17, 9.2, 10);
     const baseGeo = new THREE.CylinderGeometry(0.28, 0.32, 0.6, 10);
     const headGeo = new THREE.BoxGeometry(0.42, 0.14, 1.25);
@@ -724,7 +777,8 @@ export class DeskWorld {
     for (let i = 0; i < 26; i++) {
       const f = this.track.getFrameAt(i / 26);
       if (f.point.y > 1.2) continue;
-      const pos = f.point.clone().addScaledVector(f.right, 10.4);
+      const pos = f.point.clone().addScaledVector(f.right, 13.9); // behind the barrier
+      if (this.inStand(pos, 2)) continue;
       const lamp = new THREE.Group();
       lamp.position.set(pos.x, 0, pos.z);
       // face the road
@@ -761,12 +815,9 @@ export class DeskWorld {
   }
 
   setGantrySignal(state) {
+    // like a real start: the red columns come on one after another, then it's lights out and away
     this.gantryLights.forEach((mat, i) => {
-      if (state === 'green') {
-        mat.color.setHex(0x22c55e);
-        mat.emissive.setHex(0x22c55e);
-        mat.emissiveIntensity = 2.4;
-      } else if (state === 'red3' || (state === 'red2' && i < 3) || (state === 'red1' && i < 2)) {
+      if (state === 'red3' || (state === 'red2' && i < 4) || (state === 'red1' && i < 2)) {
         mat.color.setHex(0xef4444);
         mat.emissive.setHex(0xef4444);
         mat.emissiveIntensity = 2.2;
@@ -780,6 +831,9 @@ export class DeskWorld {
 
   update(time, dt = 0.016) {
     updateTreeWind(time);
+    crowdClock.value = time;
+    nightClock.value = time;
+    for (const o of this.animated) if (o.userData.animate) o.userData.animate(time, dt);
     const colorA = new THREE.Color(this.city.accentHex);
     const colorB = new THREE.Color(this.city.secondaryHex);
     const colorC = new THREE.Color(0xf7c948);

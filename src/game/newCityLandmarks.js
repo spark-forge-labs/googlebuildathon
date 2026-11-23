@@ -125,7 +125,7 @@ function archRecess(parent, w, h, m, x, y, z) {
   return mesh;
 }
 
-function coconutPalm(parent, x, z, h = 9, lean = 0.25, ry = 0) {
+export function coconutPalm(parent, x, z, h = 9, lean = 0.25, ry = 0) {
   const g = new THREE.Group();
   g.position.set(x, 0, z);
   g.rotation.y = ry;

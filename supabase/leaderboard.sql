@@ -22,7 +22,7 @@ alter table public.race_leaderboard drop constraint if exists race_leaderboard_c
 alter table public.race_leaderboard add constraint race_leaderboard_city_check check (city in (
   'hyderabad','bangalore','mumbai','kolkata','delhi','chennai','pondicherry','vijayawada','vizag',
   'warangal','kochi','goa','pune','ahmedabad','srinagar',
-  'london','paris','newyork','mexicocity','sanfrancisco','dallas','toronto','sydney','shanghai','hongkong','bangkok'));
+  'london','paris','newyork','mexicocity','sanfrancisco','dallas','toronto','sydney','shanghai','hongkong','bangkok','lasvegas'));
 
 create index if not exists race_leaderboard_city_time_idx
   on public.race_leaderboard (city, total_ms, created_at);

@@ -139,6 +139,10 @@ export const MUSIC_STYLES = {
     name: 'Cantopop', bpm: 108, root: 65, scale: 'minPent', chordScale: 'aeolian', prog: [0, 5, 2, 6], lead: 'erhu',
     groove: { kick: [0, 6, 8], snare: [4, 12], hatC: [0, 2, 4, 6, 8, 10, 12, 14] }, bass: 'roll', accomp: 'rhodes', feel: 'flow',
   },
+  lasvegas: {
+    name: 'Strip electro-swing', bpm: 126, root: 62, scale: 'dorian', prog: [0, 3, 4, 3], lead: 'trumpet',
+    groove: { kick: [0, 4, 8, 12], clap: [4, 12], hatC: [2, 6, 10, 14], swing: 0.14 }, bass: 'walk', accomp: 'stabs', feel: 'busy',
+  },
   bangkok: {
     name: 'Luk thung & molam', bpm: 130, root: 67, scale: 'majPent', chordScale: 'major', prog: [0, 3, 0, 4], drone: 'khaen', lead: 'phin',
     groove: { kick: [0, 6, 8], ching: { 2: 'chap', 4: 'ching', 6: 'chap', 10: 'chap', 12: 'ching', 14: 'chap' }, tom: [0, 6, 8, 11] },
