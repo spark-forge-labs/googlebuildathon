@@ -315,12 +315,13 @@ function renderDiscoveredTVs(tvs = [], activeHosts = [], castState = '') {
   } else {
     discoveredTvList.innerHTML = cards.join('');
     discoveredTvList.querySelectorAll('.tv-connect-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const idx = Number(btn.dataset.tvIdx);
-        const tv = idx >= 0 ? tvs[idx] : null;
-        if (castStatusMsg) castStatusMsg.textContent = `Connecting to ${tv ? tv.name : 'TV'}…`;
-        const res = await engine.tvHost.connectToTV(tv);
-        if (castStatusMsg) castStatusMsg.textContent = res.message;
+      btn.addEventListener('click', () => {
+        // Call synchronously inside click handler so Chrome opens its native Cast picker immediately!
+        const castPromise = engine.tvHost.startBrowserCastSync(engine.selectedCityId);
+        if (castStatusMsg) castStatusMsg.textContent = 'Opening Chrome Cast picker — select your TV!';
+        castPromise.then((res) => {
+          if (castStatusMsg) castStatusMsg.textContent = res.message;
+        });
       });
     });
   }
@@ -333,43 +334,28 @@ engine.onTVsUpdated = (tvs, activeHosts, castState) => {
   }
 };
 
-async function openCastModalAndAutoCast() {
-  if (!ui.castModal) return;
-  ui.castModal.classList.remove('hidden');
-  castRoomCodeEl.textContent = engine.tvHost.roomCode;
-  castTvUrlEl.textContent = engine.tvHost.getTVUrl();
-  engine.onRemoteConnectionChange(engine.tvHost.phoneConnected, engine.tvHost.phoneCount);
-  renderDiscoveredTVs(engine.tvHost.discoveredTVs, engine.tvHost.activeHosts, engine.tvHost.castState);
+function openCastModalAndAutoCast() {
+  // CRITICAL: Fire Chrome's PresentationRequest.start() / Safari AirPlay SYNCHRONOUSLY
+  // as the very first call inside the click handler (before ANY await!) so Chrome pops open
+  // its native Cast device picker listing every TV on your Wi-Fi immediately on click!
+  const castPromise = engine.tvHost.startBrowserCastSync(engine.selectedCityId);
 
-  // Render phone pairing QR in parallel
-  engine.tvHost.renderQRCode(castQrCanvas).then((phoneUrl) => {
-    castPhoneUrlEl.textContent = phoneUrl;
-  });
-
-  // Immediately cast on click to the auto-detected TV on the same Wi-Fi!
-  if (engine.tvHost.discoveredTVs.length > 0 || engine.tvHost.castState === 'NOT_CONNECTED') {
-    const primary = engine.tvHost.discoveredTVs.find((t) => t.protocol === 'samsung' && t.ip) || engine.tvHost.discoveredTVs[0];
-    if (castStatusMsg) {
-      castStatusMsg.textContent = primary
-        ? `Casting to ${primary.name}${primary.ip ? ` (${primary.ip})` : ''}… Check your TV screen & press Allow if prompted!`
-        : 'Opening Cast picker…';
-    }
-    const res = await engine.tvHost.instantCastFromClick();
-    if (castStatusMsg) castStatusMsg.textContent = res.message;
-  } else {
-    if (discoveredTvList) {
-      discoveredTvList.innerHTML = '<div class="tv-scanning">Scanning your Wi-Fi for Chromecast, AirPlay &amp; Smart TVs…</div>';
-    }
-    const found = await engine.tvHost.discoverTVs(true);
-    if (found.length > 0) {
-      const primary = found.find((t) => t.protocol === 'samsung' && t.ip) || found[0];
-      if (castStatusMsg) {
-        castStatusMsg.textContent = `Found ${primary.name}! Casting automatically — check your TV screen…`;
-      }
-      const res = await engine.tvHost.instantCastFromClick();
-      if (castStatusMsg) castStatusMsg.textContent = res.message;
-    }
+  if (ui.castModal) {
+    ui.castModal.classList.remove('hidden');
+    castRoomCodeEl.textContent = engine.tvHost.roomCode;
+    castTvUrlEl.textContent = engine.tvHost.getTVUrl();
+    engine.onRemoteConnectionChange(engine.tvHost.phoneConnected, engine.tvHost.phoneCount);
+    renderDiscoveredTVs(engine.tvHost.discoveredTVs, engine.tvHost.activeHosts, engine.tvHost.castState);
+    if (castStatusMsg) castStatusMsg.textContent = 'Select your TV in the Chrome Cast popup!';
+    engine.tvHost.renderQRCode(castQrCanvas).then((phoneUrl) => {
+      castPhoneUrlEl.textContent = phoneUrl;
+    });
+    engine.tvHost.discoverTVs(false);
   }
+
+  castPromise.then((res) => {
+    if (castStatusMsg) castStatusMsg.textContent = res.message;
+  });
 }
 
 function closeCastModal() {
@@ -394,11 +380,12 @@ document.getElementById('btn-rescan-tvs')?.addEventListener('click', async () =>
   }
 });
 
-document.getElementById('btn-launch-cast')?.addEventListener('click', async () => {
-  const bestTv = engine.tvHost.discoveredTVs[0] || null;
-  if (castStatusMsg) castStatusMsg.textContent = bestTv ? `Connecting to ${bestTv.name}…` : 'Opening TV Cast / AirPlay…';
-  const res = await engine.tvHost.connectToTV(bestTv);
-  if (castStatusMsg) castStatusMsg.textContent = res.message;
+document.getElementById('btn-launch-cast')?.addEventListener('click', () => {
+  const castPromise = engine.tvHost.startBrowserCastSync(engine.selectedCityId);
+  if (castStatusMsg) castStatusMsg.textContent = 'Select your TV in the Chrome Cast popup!';
+  castPromise.then((res) => {
+    if (castStatusMsg) castStatusMsg.textContent = res.message;
+  });
 });
 
 // On phones: if a TV / Desktop race is already open on the same Wi-Fi, offer 1-tap auto-connect!
