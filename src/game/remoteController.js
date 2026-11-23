@@ -97,12 +97,58 @@ export class TVHostBridge {
     this.bc = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(`india-desk-gp-${this.roomCode}`) : null;
     this.lastTelemetrySent = 0;
     this.mirrorVideo = null;
+    this.presentationRequest = null;
+    this.presentationConnection = null;
 
     this._initBroadcastChannel();
+    this._initPresentationDefault();
     this._initNetworkAndRelay();
     initGoogleCastSDK((state) => {
       this.castState = state;
       this.onTVsDiscovered(this.discoveredTVs, this.activeHosts, this.castState);
+    });
+  }
+
+  _initPresentationDefault() {
+    if (typeof window.PresentationRequest !== 'function') return;
+    try {
+      const presUrl = `${window.location.origin}/?tv=${encodeURIComponent(this.roomCode)}`;
+      this.presentationRequest = new window.PresentationRequest([presUrl]);
+      if (navigator.presentation) {
+        navigator.presentation.defaultRequest = this.presentationRequest;
+      }
+      this.presentationRequest.getAvailability().then((avail) => {
+        if (avail.value) this.castState = 'NOT_CONNECTED';
+        avail.onchange = () => {
+          this.castState = avail.value ? 'NOT_CONNECTED' : 'NO_DEVICES_AVAILABLE';
+          this.onTVsDiscovered(this.discoveredTVs, this.activeHosts, this.castState);
+        };
+      }).catch(() => {});
+    } catch {}
+  }
+
+  /**
+   * If this screen IS the TV (opened via Chrome 1-UA Presentation Cast or Smart TV browser `/?tv=LIVE`),
+   * show a sleek floating corner QR code so anyone can scan the TV with their phone and start driving!
+   */
+  async showTVCornerQR() {
+    if (!this.isSmartTV || document.getElementById('tv-corner-qr')) return;
+    const badge = document.createElement('div');
+    badge.id = 'tv-corner-qr';
+    badge.className = 'tv-corner-qr';
+    badge.innerHTML = `
+      <canvas id="tv-corner-qr-canvas" width="96" height="96"></canvas>
+      <div class="tv-corner-text">
+        <strong>PLAY WITH PHONE</strong>
+        <span>Scan to steer</span>
+      </div>
+    `;
+    document.body.appendChild(badge);
+    const qrCanvas = document.getElementById('tv-corner-qr-canvas');
+    await QRCode.toCanvas(qrCanvas, this.getControllerUrl(), {
+      width: 96,
+      margin: 1,
+      color: { dark: '#0c1220', light: '#ffffff' },
     });
   }
 
@@ -142,6 +188,7 @@ export class TVHostBridge {
 
     if (this.relayAvailable) {
       this._connectSSE();
+      if (this.isSmartTV) this.showTVCornerQR();
       // Auto-scan the Wi-Fi network in the background right on startup!
       this.discoverTVs(false);
     }
@@ -203,7 +250,7 @@ export class TVHostBridge {
   }
 
   getTVUrl() {
-    return `${this.lanBaseUrl}/?tv=${this.roomCode}`;
+    return `${this.lanBaseUrl}/tv`;
   }
 
   async renderQRCode(canvasEl) {
@@ -257,66 +304,84 @@ export class TVHostBridge {
   }
 
   /**
-   * Connects to a specific discovered TV or auto-connects to the best available TV on the same Wi-Fi!
-   * Preserves synchronous user-gesture activation for Chrome Cast / Safari AirPlay before any async fetch.
+   * MUST be called SYNCHRONOUSLY as the very first call inside a user click event!
+   * In Chrome Desktop, `PresentationRequest([presUrl]).start()` opens Chrome's native Cast popup
+   * listing every Chromecast / Google Cast TV on the same Wi-Fi (including Samsung 65" Crystal UHD!)
+   * and streams the live 3D game page straight onto the TV via Chrome's 1-UA Presentation Cast!
+   * In Safari, synchronously invokes AirPlay `webkitShowPlaybackTargetPicker()`.
    */
-  async connectToTV(selectedTv = null) {
-    const tvUrl = this.getTVUrl();
-    const targetTv = selectedTv || this.discoveredTVs[0] || null;
+  startBrowserCastSync(cityId = null) {
+    const qs = new URLSearchParams({ tv: this.roomCode });
+    if (cityId) qs.set('city', cityId);
+    const presUrl = `${window.location.origin}/?${qs.toString()}`;
 
-    // 1. If targeting a discovered Samsung / DIAL Smart TV on LAN, launch directly over WSS 8002 / DIAL!
-    if (targetTv && (targetTv.protocol === 'samsung' || targetTv.dialUrl)) {
+    // 1. Chrome / Edge Desktop native 1-UA Presentation Cast (opens native Cast sheet with TVs on Wi-Fi!)
+    if (typeof window.PresentationRequest === 'function') {
       try {
-        const resp = await fetch('/api/cast-to-tv', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tv: targetTv, tvUrl }),
-        });
-        if (resp.ok) {
-          const result = await resp.json();
-          if (result.launched || result.needsAllow) {
-            return { mode: result.method || 'samsung', launched: Boolean(result.launched), message: result.message };
-          }
-        }
-      } catch {}
+        const req = new window.PresentationRequest([presUrl]);
+        this.presentationRequest = req;
+        const promise = req.start();
+        return promise
+          .then((conn) => {
+            this.presentationConnection = conn;
+            this.castState = 'CONNECTED';
+            conn.onclose = () => {
+              this.presentationConnection = null;
+              this.castState = 'NOT_CONNECTED';
+            };
+            return {
+              mode: 'presentation',
+              launched: true,
+              message: 'Casting live 3D race to your TV! Scan the QR code with your phone to steer.',
+            };
+          })
+          .catch((err) => {
+            if (err && err.name === 'AbortError') {
+              return { mode: 'cancel', launched: false, message: 'Cast picker closed.' };
+            }
+            return this._fallbackCastAfterSync(err);
+          });
+      } catch (err) {
+        return this._fallbackCastAfterSync(err);
+      }
     }
 
-    // 2. Safari / macOS / iOS native AirPlay TV Picker streaming the live 3D game canvas!
+    // 2. Safari (Mac / iPhone) native AirPlay picker streaming live 3D canvas!
     const mirror = this._ensureMirrorVideo();
     if (mirror && typeof mirror.webkitShowPlaybackTargetPicker === 'function') {
       try {
         mirror.webkitShowPlaybackTargetPicker();
-        return { mode: 'airplay', launched: true, message: 'Select your AirPlay TV from the Apple picker to stream live!' };
+        return Promise.resolve({
+          mode: 'airplay',
+          launched: true,
+          message: 'Select your TV from the AirPlay picker to stream live!',
+        });
       } catch {}
     }
 
-    // 3. Google Cast Sender SDK (Chrome / Edge -> Chromecast / Google TV / Android TV on same Wi-Fi)
-    if (window.cast && window.cast.framework) {
+    return this._fallbackCastAfterSync(null);
+  }
+
+  async _fallbackCastAfterSync(prevErr) {
+    // Fallback to Google Cast SDK if PresentationRequest wasn't supported
+    if (window.cast && window.cast.framework && this.castState !== 'NO_DEVICES_AVAILABLE') {
       try {
-        const ctx = window.cast.framework.CastContext.getInstance();
-        await ctx.requestSession();
-        return { mode: 'chromecast', launched: true, message: 'Connected to Chromecast / Google TV on your Wi-Fi!' };
+        await window.cast.framework.CastContext.getInstance().requestSession();
+        return { mode: 'chromecast', launched: true, message: 'Connected to your TV via Google Cast!' };
       } catch (err) {
         if (err === 'cancel') return { mode: 'cancel', launched: false, message: 'Cast picker closed.' };
       }
     }
 
-    // 4. W3C Remote Playback API on the live 3D canvas stream
-    if (mirror && mirror.remote && typeof mirror.remote.prompt === 'function') {
-      try {
-        await mirror.remote.prompt();
-        return { mode: 'remote-playback', launched: true, message: 'Streaming live race to your TV!' };
-      } catch {}
-    }
-
+    const tvUrl = this.getTVUrl();
+    const targetTv = this.discoveredTVs[0];
     if (targetTv) {
       return {
         mode: 'guide',
         launched: false,
-        message: `Found ${targetTv.name}${targetTv.ip ? ` (${targetTv.ip})` : ''} on Wi-Fi! In Chrome click ⋮ → Cast, Save and Share → Cast → pick "${targetTv.name}", OR open ${tvUrl} on the TV browser.`,
+        message: `Found ${targetTv.name} on Wi-Fi${prevErr?.name ? ` (${prevErr.name})` : ''}. In Chrome click ⋮ → Cast, Save and Share → Cast → pick "${targetTv.name}", OR open ${tvUrl} on the TV browser.`,
       };
     }
-
     return {
       mode: 'guide',
       launched: false,
@@ -324,27 +389,12 @@ export class TVHostBridge {
     };
   }
 
-  /**
-   * One-click Cast directly from the browser Cast icon!
-   * Immediately casts to the auto-detected Samsung Smart TV on the same Wi-Fi,
-   * or invokes Chrome's native Cast / Safari AirPlay synchronously inside the click!
-   */
-  async instantCastFromClick() {
-    const samsungTv = this.discoveredTVs.find((t) => t.protocol === 'samsung' && t.ip);
-    const castReady = window.cast && window.cast.framework && this.castState !== 'NO_DEVICES_AVAILABLE';
+  async connectToTV(selectedTv = null, cityId = null) {
+    return await this.startBrowserCastSync(cityId);
+  }
 
-    if (samsungTv) {
-      return await this.connectToTV(samsungTv);
-    }
-    if (castReady) {
-      try {
-        await window.cast.framework.CastContext.getInstance().requestSession();
-        return { mode: 'chromecast', launched: true, message: 'Casting to your TV on Wi-Fi!' };
-      } catch (err) {
-        if (err === 'cancel') return { mode: 'cancel', launched: false, message: 'Cast picker closed.' };
-      }
-    }
-    return await this.connectToTV(this.discoveredTVs[0] || null);
+  async instantCastFromClick(cityId = null) {
+    return await this.startBrowserCastSync(cityId);
   }
 }
 

@@ -214,12 +214,13 @@ function lookupDnsSdFriendly(instanceName, serviceType, timeoutMs = 800) {
     proc.on('error', () => resolve({ friendlyName: instanceName }));
     setTimeout(() => {
       try { proc.kill('SIGKILL'); } catch {}
-      const fnMatch = out.match(/fn=([^\s]+(?:\\ [^\s]+)*)/);
-      const mdMatch = out.match(/md=([^\s]+(?:\\ [^\s]+)*)/);
-      const friendlyName = fnMatch
-        ? fnMatch[1].replace(/\\ /g, ' ').replace(/\\'/g, "'").trim()
-        : instanceName;
-      const model = mdMatch ? mdMatch[1].replace(/\\ /g, ' ').trim() : '';
+      // Google Cast TXT records include fn=65\"\ Crystal\ UHD and md=U800FD (backslash-escaped spaces & quotes)
+      const fnMatch = out.match(/fn=((?:\\.|[^\s])+)/);
+      const mdMatch = out.match(/md=((?:\\.|[^\s])+)/);
+      const unescapeTxt = (s) =>
+        s.replace(/\\([ "'\\])/g, '$1').replace(/\\(\d{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8))).trim();
+      const friendlyName = fnMatch ? unescapeTxt(fnMatch[1]) : instanceName;
+      const model = mdMatch ? unescapeTxt(mdMatch[1]) : '';
       resolve({ friendlyName, model });
     }, timeoutMs);
   });
@@ -296,6 +297,10 @@ export async function discoverTVsOnNetwork() {
       const existing = merged.get(key);
       if (!existing.ip && item.ip) existing.ip = item.ip;
       if (!existing.dialUrl && item.dialUrl) existing.dialUrl = item.dialUrl;
+      if (item.protocol === 'chromecast' && !existing.brand.includes('Google Cast')) {
+        existing.brand = `${existing.brand} • Google Cast`;
+        existing.hasGoogleCast = true;
+      }
       if (item.protocol === 'airplay' && !existing.brand.includes('AirPlay')) {
         existing.brand = `${existing.brand} • AirPlay`;
       }
@@ -480,22 +485,45 @@ function launchOnSamsungTizen(ip, tvUrl, { useTls = true, timeoutMs = 14000 } = 
   });
 }
 
+function checkSamsungAppExists(ip, appId, timeoutMs = 1400) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { hostname: ip, port: 8001, path: `/api/v2/applications/${appId}`, headers: { Connection: 'close' }, timeout: timeoutMs },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      }
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
 export async function launchOnLanTV(tv, tvUrl) {
   if (!tv || !tv.ip) {
     return {
       launched: false,
       method: 'browser-cast',
-      message: `Found ${tv?.name || 'TV'} on your Wi-Fi! Pick it in the browser Cast picker.`,
+      message: `Found ${tv?.name || 'TV'} on your Wi-Fi! Pick it in Chrome Cast or AirPlay.`,
     };
   }
 
-  // 1. Samsung Tizen Smart TV (modern WSS port 8002 with TokenAuth + fallback to WS 8001)
+  // 1. Samsung Tizen Smart TV: verify whether this Tizen firmware allows remote browser launch
   if (tv.protocol === 'samsung') {
-    const wssRes = await launchOnSamsungTizen(tv.ip, tvUrl, { useTls: true, timeoutMs: 14000 });
-    if (wssRes.launched || wssRes.needsAllow) return wssRes;
+    const canLaunchBrowser = await checkSamsungAppExists(tv.ip, 'org.tizen.browser');
+    if (canLaunchBrowser) {
+      const wssRes = await launchOnSamsungTizen(tv.ip, tvUrl, { useTls: true, timeoutMs: 14000 });
+      if (wssRes.launched || wssRes.needsAllow) return wssRes;
+    }
 
-    const wsRes = await launchOnSamsungTizen(tv.ip, tvUrl, { useTls: false, timeoutMs: 4000 });
-    if (wsRes.launched) return wsRes;
+    // Modern 2024–2025 Samsung Tizen TVs block remote browser launch over LAN,
+    // but support native 60fps Apple AirPlay 2 & Samsung Internet!
+    return {
+      launched: false,
+      samsungAirPlay: true,
+      method: 'airplay-or-tv-browser',
+      message: `Found ${tv.name} (${tv.ip})! This Samsung model blocks remote browser launch — use Mac Control Center → Screen Mirroring → "${tv.name}" (60fps AirPlay!), OR open ${tvUrl} in the TV's Internet app.`,
+    };
   }
 
   // 2. DIAL Smart TVs

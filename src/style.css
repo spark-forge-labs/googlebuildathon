@@ -2237,3 +2237,42 @@ body.cinematic .tv-tower {
   cursor: pointer;
   white-space: nowrap;
 }
+
+
+/* Floating Phone-Pairing QR shown on the TV screen itself when cast/opened in TV mode */
+.tv-corner-qr {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(10, 16, 30, 0.88);
+  border: 1.5px solid rgba(24, 214, 196, 0.55);
+  border-radius: 14px;
+  padding: 8px 12px 8px 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+
+.tv-corner-qr canvas {
+  border-radius: 8px;
+  display: block;
+}
+
+.tv-corner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tv-corner-text strong {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+}
+
+.tv-corner-text span {
+  font-size: 10.5px;
+  color: #cbd5e1;
+}

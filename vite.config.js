@@ -68,6 +68,17 @@ function phoneControllerRelayPlugin() {
 
   function attachMiddleware(server) {
     server.middlewares.use(async (req, res, next) => {
+      // Short vanity URLs so typing on a Smart TV remote or phone takes seconds!
+      if (req.url === '/tv' || req.url === '/tv/') {
+        res.writeHead(302, { Location: '/?tv=LIVE' });
+        res.end();
+        return;
+      }
+      if (req.url === '/play' || req.url === '/play/' || req.url === '/wheel') {
+        res.writeHead(302, { Location: '/?controller=LIVE' });
+        res.end();
+        return;
+      }
       if (!req.url || !req.url.startsWith('/api/')) return next();
 
       const urlObj = new URL(req.url, 'http://localhost');
