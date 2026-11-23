@@ -522,14 +522,20 @@ export class GameEngine {
     ui.finishLbStatus.textContent = `${mine} ${where2}`;
   }
 
-  selectCity(cityId) {
+  selectCity(cityId, fromRemote = false) {
     if (cityId === this.selectedCityId) return;
     this.loadCityWorld(cityId);
+    if (!fromRemote && this.tvHost && this.tvHost.isControllingExternalTV()) {
+      this.tvHost.forwardToTV({ type: 'action', action: 'select_city', value: cityId });
+    }
   }
 
-  selectCar(carId) {
+  selectCar(carId, fromRemote = false) {
     this.selectedCarId = carId;
     this.spawnRacers();
+    if (!fromRemote && this.tvHost && this.tvHost.isControllingExternalTV()) {
+      this.tvHost.forwardToTV({ type: 'action', action: 'select_car', value: carId });
+    }
   }
 
   async toggleMotionSteering() {
@@ -545,14 +551,23 @@ export class GameEngine {
   handleRemoteAction(action, value) {
     if (action === 'start_race') {
       if (this.ui.castModal) this.ui.castModal.classList.add('hidden');
-      this.startRace();
+      this.startRace(true);
+    } else if (action === 'back_menu') {
+      this.backToMenu();
     } else if (action === 'cycle_camera') {
-      this.cycleCamera();
+      this.cycleCamera(true);
     } else if (action === 'reset_car') {
-      this.resetPlayerCar();
+      this.resetPlayerCar(true);
+    } else if (action === 'toggle_audio') {
+      this.toggleAudio();
+    } else if (action === 'toggle_music') {
+      this.toggleMusic();
     } else if (action === 'select_city' && value) {
-      this.selectCity(value);
+      this.selectCity(value, true);
       if (this.onCityChangedExternal) this.onCityChangedExternal();
+    } else if (action === 'select_car' && value) {
+      this.selectCar(value, true);
+      if (this.onCarChangedExternal) this.onCarChangedExternal();
     }
   }
 
@@ -625,7 +640,10 @@ export class GameEngine {
     this.ghostInfo = null;
   }
 
-  startRace() {
+  startRace(fromRemote = false) {
+    if (!fromRemote && this.tvHost && this.tvHost.isControllingExternalTV()) {
+      this.tvHost.forwardToTV({ type: 'action', action: 'start_race' });
+    }
     this.telemetry = new RaceTelemetry();
     this.physAcc = 0;
     raceRules.strict = !this.settings.get('arcadeRules');
@@ -674,9 +692,12 @@ export class GameEngine {
     this.spawnRacers();
   }
 
-  cycleCamera() {
+  cycleCamera(fromRemote = false) {
     this.camModeIdx = (this.camModeIdx + 1) % CAMERA_MODES.length;
     this.ui.btnCamera.textContent = `CAM: ${CAMERA_MODES[this.camModeIdx]}`;
+    if (!fromRemote && this.tvHost && this.tvHost.isControllingExternalTV()) {
+      this.tvHost.forwardToTV({ type: 'action', action: 'cycle_camera' });
+    }
   }
 
   toggleMusic() {
@@ -1226,6 +1247,28 @@ export class GameEngine {
       this.input.analogThrottle = this.state === 'RACING' ? pad.throttle : 0;
       this.input.analogBrake = this.state === 'RACING' ? pad.brake : 0;
     }
+    // Mirror Mac keyboard controls live to the Cast TV screen when casting!
+    if (this.tvHost && this.tvHost.isControllingExternalTV()) {
+      const nowMs = performance.now();
+      const keySteer = (this.input.left ? 1 : 0) - (this.input.right ? 1 : 0);
+      const anyKey =
+        this.input.up || this.input.down || keySteer !== 0 || this.input.drift || this.input.boost;
+      if ((anyKey || this._wasMirroringMacKeys) && nowMs - (this._lastMacMirrorMs || 0) >= 33) {
+        this._lastMacMirrorMs = nowMs;
+        this._wasMirroringMacKeys = anyKey;
+        this.tvHost.forwardToTV({
+          type: 'input',
+          up: this.input.up,
+          down: this.input.down,
+          throttle: this.input.up ? 1 : 0,
+          brake: this.input.down ? 1 : 0,
+          drift: this.input.drift,
+          boost: this.input.boost,
+          steer: keySteer,
+        });
+      }
+    }
+
     // Wireless Phone Steering Wheel (Cast-to-TV controller) drives analog + pedals when paired
     const remoteFresh = this.remoteInput.active && performance.now() - this.remoteInput.lastPacketAt < 1500;
     if (remoteFresh) {
