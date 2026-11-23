@@ -147,6 +147,13 @@ export class GameEngine {
       },
       onRemoteAction: (action, value) => this.handleRemoteAction(action, value),
       onConnectionChange: (connected, count) => this.onRemoteConnectionChange(connected, count),
+      onTVsDiscovered: (tvs, activeHosts, castState) => {
+        if (this.onTVsUpdated) this.onTVsUpdated(tvs, activeHosts, castState);
+        if (!this.tvHost.phoneConnected && tvs.length > 0) {
+          if (this.ui.castMenuLabel) this.ui.castMenuLabel.textContent = `CAST TO TV (${tvs.length} FOUND)`;
+          if (this.ui.castHudLabel) this.ui.castHudLabel.textContent = `CAST (${tvs.length})`;
+        }
+      },
     });
 
     this.playerName = '';

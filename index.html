@@ -216,16 +216,19 @@
 
           <div class="cast-columns">
             <div class="cast-col">
-              <div class="cast-step-tag">STEP 1 • TV DISPLAY</div>
-              <h3>Put Race on Your TV</h3>
-              <p class="cast-desc">
-                Cast this screen to Chromecast / AirPlay / Smart TV, or open the TV link directly on your Smart TV browser.
-              </p>
-              <button id="btn-launch-cast" class="primary-btn cast-action-btn">CAST / TV FULLSCREEN</button>
-              <div id="cast-status-msg" class="cast-status-msg">Ready to cast on local Wi-Fi</div>
+              <div class="cast-step-tag">STEP 1 • AUTO-DISCOVERED TVs ON YOUR WI-FI</div>
+              <div class="tv-list-head">
+                <h3>Connect to a TV</h3>
+                <button id="btn-rescan-tvs" class="mini-copy-btn">SCAN WI-FI</button>
+              </div>
+              <div id="discovered-tv-list" class="discovered-tv-list">
+                <div class="tv-scanning">Scanning your Wi-Fi for Chromecast, AirPlay &amp; Smart TVs…</div>
+              </div>
+              <button id="btn-launch-cast" class="primary-btn cast-action-btn">AUTO-CONNECT / CAST SCREEN</button>
+              <div id="cast-status-msg" class="cast-status-msg">Scanning local Wi-Fi network…</div>
 
               <div class="url-box">
-                <span class="url-lbl">SMART TV URL</span>
+                <span class="url-lbl">SMART TV BROWSER URL (AUTO-PAIRS WITH PHONE)</span>
                 <div class="url-row">
                   <code id="cast-tv-url">http://localhost:5173</code>
                   <button id="btn-copy-tv" class="mini-copy-btn">COPY</button>
