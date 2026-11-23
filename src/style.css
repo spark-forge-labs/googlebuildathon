@@ -1304,3 +1304,333 @@ body.intro-playing #start-overlay {
 @media (prefers-reduced-motion: reduce) {
   .arrival-card { animation: none; }
 }
+
+/* ---------- Race control: crash cinematics, flags, live replay ---------- */
+.cine-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 11vh;
+  background: #000;
+  z-index: 28;
+  pointer-events: none;
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cine-bar.top {
+  top: 0;
+  transform: translateY(-100%);
+}
+.cine-bar.bottom {
+  bottom: 0;
+  transform: translateY(100%);
+}
+body.cinematic .cine-bar {
+  transform: translateY(0);
+}
+body.cinematic #hud {
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.cine-card {
+  position: fixed;
+  left: 5vw;
+  bottom: calc(11vh + 22px);
+  z-index: 29;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 18px 12px 16px;
+  border-left: 5px solid #f2c200;
+  background: linear-gradient(90deg, rgba(8, 10, 16, 0.92), rgba(8, 10, 16, 0.55));
+  color: #fff;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-24px);
+  transition: opacity 0.3s, transform 0.3s;
+}
+.cine-card.show {
+  opacity: 1;
+  transform: none;
+}
+.cine-card.dsq {
+  border-left-color: #e10600;
+}
+.cine-card small {
+  font: 800 10px/1 system-ui, sans-serif;
+  letter-spacing: 0.18em;
+  color: #f2c200;
+}
+.cine-card.dsq small {
+  color: #ff5a4f;
+}
+.cine-card b {
+  font: italic 900 clamp(26px, 5vw, 44px) / 1.05 system-ui, sans-serif;
+  letter-spacing: 0.02em;
+}
+.cine-card span {
+  font: 600 13px/1.3 system-ui, sans-serif;
+  opacity: 0.88;
+}
+
+.race-flag {
+  position: fixed;
+  left: 50%;
+  top: 92px;
+  z-index: 45;
+  display: flex;
+  align-items: stretch;
+  transform: translateX(-50%);
+  max-width: 92vw;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(8, 10, 16, 0.9);
+  color: #fff;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  animation: flagIn 0.28s ease-out;
+}
+.race-flag.hidden {
+  display: none;
+}
+.race-flag i {
+  width: 34px;
+  flex: none;
+  background: #f2c200;
+}
+.race-flag.limits i {
+  background: repeating-linear-gradient(135deg, #111 0 8px, #fff 8px 16px);
+}
+.race-flag.black i {
+  background: #000;
+  border-right: 3px solid #e10600;
+}
+.race-flag div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px;
+}
+.race-flag b {
+  font: italic 900 15px/1.1 system-ui, sans-serif;
+  letter-spacing: 0.06em;
+}
+.race-flag.black b {
+  color: #ff5a4f;
+}
+.race-flag span {
+  font: 600 11px/1.3 system-ui, sans-serif;
+  opacity: 0.85;
+}
+@keyframes flagIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+  }
+}
+
+.pip-frame {
+  position: fixed;
+  z-index: 20;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+.pip-frame.hidden {
+  display: none;
+}
+.pip-live {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: #e10600;
+  color: #fff;
+  font: 900 10px/1.4 system-ui, sans-serif;
+  letter-spacing: 0.1em;
+  animation: pulseNitro 0.7s ease-in-out infinite alternate;
+}
+.pip-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 3px 8px;
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.8), transparent);
+  color: #fff;
+  font: 800 11px/1.4 system-ui, sans-serif;
+  letter-spacing: 0.06em;
+}
+
+.standing-row.is-dsq {
+  opacity: 0.6;
+  text-decoration: line-through;
+  text-decoration-color: rgba(225, 6, 0, 0.8);
+}
+.standing-row.is-dsq .mono {
+  color: #ff5a4f;
+  text-decoration: none;
+}
+.dsq-reason {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(225, 6, 0, 0.16);
+  border: 1px solid rgba(225, 6, 0, 0.5);
+  font-size: 13px;
+  font-weight: 700;
+}
+#finish-overlay.dsq .menu-badge {
+  background: #111;
+  color: #ff5a4f;
+}
+
+/* ---------- Live TV graphics: timing tower + fastest lap ---------- */
+.tv-tower {
+  position: fixed;
+  left: 18px;
+  top: 92px;
+  z-index: 12;
+  width: 178px;
+  font: 800 12px/1 system-ui, sans-serif;
+  color: #fff;
+  pointer-events: none;
+  transform: scale(var(--ui-scale, 1));
+  transform-origin: top left;
+}
+.tv-tower.hidden,
+body.cinematic .tv-tower {
+  display: none;
+}
+.tv-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  background: #e10600;
+  border-radius: 6px 6px 0 0;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+}
+.tv-live {
+  animation: pulseNitro 0.8s ease-in-out infinite alternate;
+}
+.tv-race {
+  opacity: 0.95;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tv-lap {
+  padding: 5px 8px;
+  background: rgba(8, 10, 16, 0.92);
+  font: italic 900 13px/1 system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.tv-rows {
+  background: rgba(8, 10, 16, 0.78);
+  border-radius: 0 0 6px 6px;
+  overflow: hidden;
+}
+.tv-row {
+  display: grid;
+  grid-template-columns: 20px 4px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.tv-row .p {
+  text-align: center;
+  font-size: 12px;
+}
+.tv-row i {
+  height: 14px;
+  border-radius: 1px;
+}
+.tv-row .c {
+  letter-spacing: 0.06em;
+}
+.tv-row .g {
+  font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: 0.85;
+}
+.tv-row.me {
+  background: linear-gradient(90deg, rgba(255, 140, 43, 0.45), rgba(255, 140, 43, 0.12));
+}
+.tv-row.out {
+  opacity: 0.55;
+}
+.tv-row em {
+  font-style: normal;
+}
+.tv-row em.dsq {
+  color: #ff5a4f;
+}
+.tv-fastest {
+  position: fixed;
+  left: 50%;
+  bottom: 120px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 6px 8px;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  background: linear-gradient(90deg, #6d28d9, #a21caf);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  animation: flagIn 0.3s ease-out;
+}
+.tv-fastest.hidden {
+  display: none;
+}
+.tv-fastest i {
+  font-style: normal;
+  font-size: 18px;
+}
+.tv-fastest small {
+  display: block;
+  font: 800 9px/1 system-ui, sans-serif;
+  letter-spacing: 0.16em;
+  opacity: 0.85;
+}
+.tv-fastest b {
+  font: italic 900 15px/1.2 system-ui, sans-serif;
+}
+.tv-fastest span {
+  font: 800 15px/1 ui-monospace, Menlo, monospace;
+}
+/* phones in landscape: the POS card already shows your place, keep the screen clear */
+@media (max-height: 480px) {
+  .tv-tower {
+    display: none;
+  }
+  .tv-fastest {
+    top: 64px;
+    bottom: auto;
+  }
+}
+@media (max-width: 760px) {
+  .tv-tower {
+    top: 70px;
+    left: 8px;
+    width: 128px;
+    font-size: 10px;
+  }
+  .tv-row {
+    height: 17px;
+    grid-template-columns: 14px 3px 1fr auto;
+    gap: 4px;
+  }
+  .tv-row .g {
+    font-size: 9px;
+  }
+  .tv-lap {
+    font-size: 11px;
+  }
+}

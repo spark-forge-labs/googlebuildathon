@@ -1,18 +1,21 @@
 import * as THREE from 'three';
 
 /**
- * Real street-circuit dressing (Monaco / Singapore / Macau style):
- *  - concrete barrier walls with sponsor boards (red/white chevrons in the corners)
- *  - debris catch-fencing on steel posts above the walls
- *  - red/white kerbs only where the road bends; grey concrete gutters elsewhere
- *  - raised paved footpaths behind the walls
+ * Grand-prix trackside (Monza / Montréal style), on top of the city streets:
+ *  - red/white kerbs where the road bends, grey concrete gutters elsewhere
+ *  - mown grass verges along the straights, asphalt run-off in the corners
+ *  - barrier walls set back behind the verges, with long runs of repeated
+ *    sponsor boards (red/white chevrons in the corners) and debris catch-fencing
+ *  - paved service road behind the barrier
  *  - painted road markings, manhole covers, asphalt repairs and skid marks
  * Walls only line ground-level road; the elevated bridge keeps its guardrails.
  */
-export const WALL_INNER = 9.3; // lateral distance of the wall face from the centre line
+export const KERB_OUTER = 8.55; // road half width + kerb
+export const TRACK_LIMIT = 9.05; // car centre beyond this = all four wheels off the track
+export const WALL_INNER = 12.2; // lateral distance of the barrier face from the centre line
 const WALL_T = 0.6;
 const WALL_H = 1.15;
-const FENCE_H = 2.6;
+const FENCE_H = 3.4;
 const GROUND_MAX_Y = 1.3;
 
 function rng(seed) {
@@ -36,53 +39,117 @@ function canvasTexture(w, h, draw, srgb = true) {
   return t;
 }
 
-/** Wall face: top row = sponsor boards, bottom row = corner chevrons. */
+/**
+ * Barrier boards, 4 rows (all brands fictional):
+ * 0 yellow tyre-maker boards, 1 black tech boards, 2 the city's own GP boards, 3 corner chevrons.
+ */
 function wallBannerTexture(city) {
-  const sponsors = [
-    { bg: '#0d1b33', fg: '#ffffff', text: `${city.name.toUpperCase()} GP`, acc: city.badgeColor },
-    { bg: '#f4f4f0', fg: '#141414', text: city.nitroName, acc: '#e11d48' },
-    { bg: '#111111', fg: '#f7c948', text: 'DESI TYRES', acc: '#f7c948' },
-    { bg: city.badgeColor, fg: '#ffffff', text: city.nativeName, acc: '#ffffff' },
-    { bg: '#1d4ed8', fg: '#ffffff', text: 'CHAI FUEL', acc: '#93c5fd' },
-    { bg: '#f8fafc', fg: '#0f172a', text: 'INDIA GP', acc: '#f97316' },
-  ];
-  return canvasTexture(2048, 256, (g, w, h) => {
-    const pw = w / sponsors.length;
-    sponsors.forEach((s, i) => {
-      const x = i * pw;
-      g.fillStyle = s.bg;
-      g.fillRect(x, 0, pw, h / 2);
-      g.fillStyle = s.acc;
-      g.fillRect(x, h / 2 - 10, pw, 10);
-      g.fillStyle = s.fg;
-      g.font = `900 64px system-ui, "Noto Sans", "Noto Sans CJK SC", "Noto Sans Thai", Arial, sans-serif`;
-      g.textAlign = 'center';
-      g.textBaseline = 'middle';
-      g.fillText(s.text, x + pw / 2, h / 4, pw - 30);
-      g.fillStyle = 'rgba(0,0,0,0.35)';
-      g.fillRect(x + pw - 3, 0, 3, h / 2); // panel joints
-    });
-    // chevrons
-    const y0 = h / 2;
-    g.fillStyle = '#f2f2ee';
-    g.fillRect(0, y0, w, h / 2);
-    g.fillStyle = '#c81e1e';
-    for (let x = -h; x < w + h; x += 128) {
+  const W = 2048;
+  const RH = 128;
+  return canvasTexture(W, RH * 4, (g) => {
+    const font = (px, w = 900, style = '') =>
+      `${style} ${w} ${px}px system-ui, "Noto Sans", "Noto Sans CJK SC", "Noto Sans Thai", "Noto Sans Devanagari", Arial, sans-serif`;
+    g.textBaseline = 'middle';
+    g.textAlign = 'center';
+    // row 0: tyre maker, red italic on racing yellow
+    g.fillStyle = '#ffd400';
+    g.fillRect(0, 0, W, RH);
+    g.fillStyle = '#d7141a';
+    g.font = font(86, 900, 'italic');
+    for (let i = 0; i < 4; i++) g.fillText('VELOCI', W / 8 + (i * W) / 4, RH / 2 + 4, W / 4 - 40);
+    // row 1: tech brand, white on black with a ring logo
+    g.fillStyle = '#121212';
+    g.fillRect(0, RH, W, RH);
+    for (let i = 0; i < 4; i++) {
+      const cx = (i * W) / 4 + 70;
+      g.strokeStyle = '#ffffff';
+      g.lineWidth = 9;
       g.beginPath();
-      g.moveTo(x, y0);
-      g.lineTo(x + 64, y0);
-      g.lineTo(x + 128, y0 + h / 4);
-      g.lineTo(x + 64, y0 + h / 2);
-      g.lineTo(x, y0 + h / 2);
-      g.lineTo(x + 64, y0 + h / 4);
+      g.arc(cx, RH * 1.5, 34, 0, Math.PI * 2);
+      g.stroke();
+      g.beginPath();
+      g.moveTo(cx - 16, RH * 1.5 + 14);
+      g.lineTo(cx, RH * 1.5 - 16);
+      g.lineTo(cx + 16, RH * 1.5 + 14);
+      g.stroke();
+      g.fillStyle = '#ffffff';
+      g.font = font(72, 700);
+      g.textAlign = 'left';
+      g.fillText('novatel', cx + 54, RH * 1.5 + 4, W / 4 - 150);
+      g.textAlign = 'center';
+    }
+    // row 2: the city's own grand prix, alternating native script
+    g.fillStyle = '#0d1b33';
+    g.fillRect(0, RH * 2, W, RH);
+    g.fillStyle = city.badgeColor;
+    g.fillRect(0, RH * 3 - 12, W, 12);
+    for (let i = 0; i < 4; i++) {
+      g.fillStyle = '#ffffff';
+      g.font = font(64, 900);
+      g.fillText(i % 2 ? city.nativeName : `${city.name.toUpperCase()} GP`, W / 8 + (i * W) / 4, RH * 2.5 - 2, W / 4 - 40);
+    }
+    // row 3: chevrons
+    g.fillStyle = '#f2f2ee';
+    g.fillRect(0, RH * 3, W, RH);
+    g.fillStyle = '#c81e1e';
+    for (let x = -RH; x < W + RH; x += 128) {
+      g.beginPath();
+      g.moveTo(x, RH * 3);
+      g.lineTo(x + 64, RH * 3);
+      g.lineTo(x + 128, RH * 3.5);
+      g.lineTo(x + 64, RH * 4);
+      g.lineTo(x, RH * 4);
+      g.lineTo(x + 64, RH * 3.5);
       g.closePath();
       g.fill();
     }
-    // road grime splashed along the bottom of the boards
-    for (let i = 0; i < 1400; i++) {
-      const yy = (i % 2 ? h / 2 : h) - Math.random() * Math.random() * 60;
-      g.fillStyle = `rgba(40,36,30,${Math.random() * 0.14})`;
-      g.fillRect(Math.random() * w, yy, 2 + Math.random() * 10, 1 + Math.random() * 4);
+    // panel joints and road grime along the bottom of every board
+    for (let r = 0; r < 4; r++) {
+      for (let x = 0; x < W; x += W / 8) {
+        g.fillStyle = 'rgba(0,0,0,0.3)';
+        g.fillRect(x, r * RH, 3, RH);
+      }
+      for (let i = 0; i < 500; i++) {
+        g.fillStyle = `rgba(40,36,30,${Math.random() * 0.12})`;
+        g.fillRect(Math.random() * W, (r + 1) * RH - Math.random() * Math.random() * 40, 2 + Math.random() * 10, 1 + Math.random() * 3);
+      }
+    }
+  });
+}
+
+/** Mown grass with stripes running along the track (u across, v along in 3-unit bands). */
+function grassTexture() {
+  return canvasTexture(128, 256, (g, w, h) => {
+    for (let y = 0; y < h; y += 128) {
+      g.fillStyle = y % 256 ? '#3f6a2c' : '#4a7733';
+      g.fillRect(0, y, w, 128);
+    }
+    for (let i = 0; i < 6000; i++) {
+      const v = Math.random();
+      g.fillStyle = v < 0.5 ? `rgba(35,55,22,${Math.random() * 0.35})` : `rgba(120,150,80,${Math.random() * 0.2})`;
+      g.fillRect(Math.random() * w, Math.random() * h, 1, 1 + Math.random() * 3);
+    }
+  });
+}
+
+/** Asphalt run-off with tyre marks from cars running wide. */
+function runoffTexture() {
+  return canvasTexture(128, 256, (g, w, h) => {
+    g.fillStyle = '#55554f';
+    g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 9000; i++) {
+      const v = 60 + Math.random() * 60;
+      g.fillStyle = `rgb(${v | 0},${v | 0},${(v - 3) | 0})`;
+      g.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+    }
+    for (let k = 0; k < 5; k++) {
+      g.strokeStyle = `rgba(15,15,15,${0.15 + Math.random() * 0.2})`;
+      g.lineWidth = 6 + Math.random() * 6;
+      g.beginPath();
+      const x0 = Math.random() * w * 0.3;
+      g.moveTo(x0, Math.random() * h);
+      g.quadraticCurveTo(w * 0.6, Math.random() * h, w * 0.4 + Math.random() * w * 0.6, Math.random() * h);
+      g.stroke();
     }
   });
 }
@@ -381,6 +448,7 @@ export function buildStreetCircuit(track, group, city, halfW, kerbW) {
 
   /* --- concrete walls with sponsor boards, catch fencing, footpaths --- */
   const banner = wallBannerTexture(city);
+  banner.userData.nightGlow = 0.75; // LED advertising boards light up at night races
   const bannerMat = new THREE.MeshStandardMaterial({ map: banner, roughness: 0.65 });
   const concreteMap = concreteTexture();
   const concrete = new THREE.MeshStandardMaterial({ map: concreteMap, roughness: 0.9 });
@@ -389,24 +457,24 @@ export function buildStreetCircuit(track, group, city, halfW, kerbW) {
   const steel = new THREE.MeshStandardMaterial({ color: 0x5b6168, roughness: 0.5, metalness: 0.7 });
   const paverMat = new THREE.MeshStandardMaterial({ map: paverTexture(), roughness: 0.92 });
   const kerbStone = new THREE.MeshStandardMaterial({ color: 0x8d8a83, roughness: 0.8 });
+  const grassMat = new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1, envMapIntensity: 0.4 });
+  const runoffMat = new THREE.MeshStandardMaterial({ map: runoffTexture(), roughness: 0.9 });
+  let stretch = 0; // which sponsor owns this stretch of barrier
   const postGeo = new THREE.BoxGeometry(0.1, FENCE_H + 0.3, 0.1);
   const posts = [];
 
   // footpath width: 16.5 from the centre line, narrower on the inside of tight bends so it never folds
+  const PATH_OUT = 17.6;
   const pathOuter = (i, side) => {
     const prev = at(i - 4).tangent;
     const next = at(i + 4).tangent;
     const turn = new THREE.Vector3().subVectors(next, prev).dot(at(i).right);
     const innerSide = Math.sign(turn) || 1;
-    if (side !== innerSide) return 16.5;
+    if (side !== innerSide) return PATH_OUT;
     const radius = (8 * stepLen) / Math.max(1e-3, at(i).curvature);
-    return Math.max(WALL_INNER + WALL_T + 0.6, Math.min(16.5, radius * 0.8));
+    return Math.max(WALL_INNER + WALL_T + 0.6, Math.min(PATH_OUT, radius * 0.8));
   };
-  const gantryGap = (i) => {
-    // leave the start gantry's legs room
-    const d = Math.abs(((i / N + 0.5) % 1) - 0.5) * lap;
-    return d < 0.8;
-  };
+  const gantryGap = () => false; // the start gantry's legs now stand behind the barriers
 
   for (const side of [-1, 1]) {
     const wallRuns = runs(N, (i) => ground(i) && ground(i + 1) && !gantryGap(i));
@@ -427,17 +495,20 @@ export function buildStreetCircuit(track, group, city, halfW, kerbW) {
         const pathUV = [];
         const curb = [];
         const curbUV = [];
+        const verge = [];
+        const vergeUV = [];
+        const row = chev ? 3 : stretch++ % 3; // sponsor row for this stretch
         for (let i = from; i <= to; i++) {
           const s = at(i);
           const dist = i * stepLen;
-          const v = (-side * dist) / 26; // banner repeats every 26 units; reads left-to-right on both walls
+          const v = (-side * dist) / 28; // boards repeat every 28 units; read left-to-right on both walls
           const inL = side * WALL_INNER;
           const outL = side * (WALL_INNER + WALL_T);
           const b0 = off(s, inL, -0.05);
           const b1 = off(s, inL, WALL_H);
           const t1 = off(s, outL, WALL_H);
           const o0 = off(s, outL, -0.05);
-          const rowV = chev ? [0.02, 0.48] : [0.52, 0.98];
+          const rowV = [1 - (row + 1) / 4 + 0.006, 1 - row / 4 - 0.006];
           face.push([b0, b1]);
           faceUV.push([[v, rowV[0]], [v, rowV[1]]]);
           top.push([b1, t1]);
@@ -453,6 +524,12 @@ export function buildStreetCircuit(track, group, city, halfW, kerbW) {
           const p0 = off(s, side * (WALL_INNER + WALL_T), 0);
           const p1 = off(s, side * pathOuter(i, side), 0);
           p0.y = p1.y = py;
+          // grass verge (straights) or asphalt run-off (corners) between the kerb and the barrier
+          const v0 = off(s, side * KERB_OUTER, 0.085);
+          const v1 = off(s, side * WALL_INNER, 0);
+          v1.y = Math.max(0.1, s.point.y - 0.04);
+          verge.push([v0, v1]);
+          vergeUV.push([[0, dist / 6], [1, dist / 6]]);
           path.push([p0, p1]);
           pathUV.push([[0, dist / 8], [7.2 / 8, dist / 8]]);
           const c0 = p1.clone();
@@ -472,6 +549,8 @@ export function buildStreetCircuit(track, group, city, halfW, kerbW) {
         group.add(mesh(ribbon(fence, fenceUV, towardRoad), fenceMat, false));
         group.add(mesh(ribbon(path, pathUV, up), paverMat, false));
         group.add(mesh(ribbon(curb, curbUV, away), kerbStone, false));
+        // night street circuits (Las Vegas) run asphalt run-off all the way round
+        group.add(mesh(ribbon(verge, vergeUV, up), chev || city.night ? runoffMat : grassMat, false));
       };
       for (let i = a + 1; i <= b; i++) {
         const switching = i === b || corner(i) !== corner(i - 1);

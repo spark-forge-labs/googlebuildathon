@@ -3,7 +3,10 @@ import { CITIES, getCityById } from './cities.js';
 import { RaceTrack } from './track.js';
 import { DeskWorld, DESK_HALF_W, DESK_HALF_D } from './deskWorld.js';
 import { CAR_CATALOG, AI_COLORS, buildVehicleMesh } from './cars.js';
-import { Racer, resolveCarCollisions, TOTAL_LAPS } from './physics.js';
+import { Racer, resolveCarCollisions, TOTAL_LAPS, raceRules } from './physics.js';
+import { CrashDirector } from './crashDirector.js';
+import { buildNightSky, applyNightCity, setCarNightLights } from './nightCity.js';
+import { Broadcast } from './broadcast.js';
 import { ParticleSystem } from './particles.js';
 import { SoundEngine } from './audio.js';
 import { MotionSteeringController } from './motionControls.js';
@@ -27,7 +30,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { CameraLookShader } from './cameraLook.js';
 
-const CAMERA_MODES = ['CHASE', 'HOOD', 'BUMPER', 'DESK TOP'];
+const CAMERA_MODES = ['CHASE', 'HOOD', 'BUMPER', 'TV', 'DESK TOP'];
 
 function formatTime(sec) {
   if (!Number.isFinite(sec) || sec < 0) return '00:00.00';
@@ -145,11 +148,14 @@ export class GameEngine {
     this.steamTimer = 0;
     this.clock = new THREE.Clock();
     this.elapsed = 0;
+    this.timeScale = 1; // slow motion during crash replays
 
     this.settings = new Settings();
     this.applySettings();
     this.settings.onChange(() => this.applySettings());
     this.gamepad = new GamepadInput();
+    this.crashDirector = new CrashDirector(this);
+    this.broadcast = new Broadcast(this);
     // Every bump / nitro the player hears is also felt
     const bump = this.sound.playBump.bind(this.sound);
     const boost = this.sound.playBoost.bind(this.sound);
@@ -233,6 +239,7 @@ export class GameEngine {
       gtao.blendIntensity = 0.85;
       composer.addPass(gtao);
       const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.18, 0.5, 0.92);
+      this.bloomPass = bloom;
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
       composer.addPass(new SMAAPass(w * Q.pixelRatio, h * Q.pixelRatio));
@@ -241,6 +248,7 @@ export class GameEngine {
       this.cameraLook.uniforms.resolution.value.set(w * Q.pixelRatio, h * Q.pixelRatio);
       composer.addPass(this.cameraLook);
       this.composer = composer;
+      this.applyTimeOfDayPost();
     } catch (e) {
       console.warn('Post-processing unavailable, rendering directly', e);
       this.composer = null;
@@ -283,36 +291,58 @@ export class GameEngine {
     this.particles.clearSkids();
 
     // Real-world atmosphere: physical sky, sun position, haze & sky reflections
-    if (this.sky) this.scene.remove(this.sky);
+    if (this.sky) {
+      this.scene.remove(this.sky);
+      if (this.sky.userData.night) {
+        this.sky.geometry.dispose();
+        this.sky.material.dispose();
+      }
+    }
     if (this.envRenderTarget) this.envRenderTarget.dispose();
     const atmo = buildRealSky(this.renderer, city);
-    this.sky = atmo.sky;
+    const night = !!city.night;
+    this.night = night;
+    if (night) {
+      // floodlit night race: black desert sky, city glow, neon reflections
+      atmo.envRT.dispose();
+      const ns = buildNightSky(this.renderer);
+      ns.sky.userData.night = true;
+      this.sky = ns.sky;
+      this.envRenderTarget = ns.envRT;
+    } else {
+      this.sky = atmo.sky;
+      this.envRenderTarget = atmo.envRT;
+    }
     this.scene.add(this.sky);
-    this.envRenderTarget = atmo.envRT;
-    this.scene.environment = atmo.envRT.texture;
-    this.scene.environmentIntensity = 0.9;
+    this.scene.environment = this.envRenderTarget.texture;
+    this.scene.environmentIntensity = night ? 0.8 : 0.9;
     // Swap in the real-world HDRI for reflections as soon as it's ready
-    loadHdriEnvironment(this.renderer, atmo.hdri).then((rt) => {
-      if (rt && this.currentCity && this.currentCity.id === city.id) this.scene.environment = rt.texture;
-    });
+    if (atmo.hdri) {
+      loadHdriEnvironment(this.renderer, atmo.hdri).then((rt) => {
+        if (rt && this.currentCity && this.currentCity.id === city.id) this.scene.environment = rt.texture;
+      });
+    }
     this.scene.background = null;
-    this.scene.fog = new THREE.FogExp2(atmo.haze, 0.0016);
+    this.scene.fog = night ? new THREE.FogExp2(0x0d0a16, 0.0019) : new THREE.FogExp2(atmo.haze, 0.0016);
 
-    this.dirLight.color.copy(atmo.sunColor);
-    this.dirLight.intensity = atmo.sunIntensity;
+    this.dirLight.color.copy(night ? new THREE.Color(0xe6edff) : atmo.sunColor);
+    this.dirLight.intensity = night ? 1.55 : atmo.sunIntensity;
     this.dirLight.position.copy(atmo.sunDir).multiplyScalar(160);
     this.dirLight.target.position.set(0, 0, 0);
     this.scene.add(this.dirLight.target);
-    this.hemiLight.color.set(0xbfd6ff);
-    this.hemiLight.groundColor.set(0x5b4a36);
-    this.hemiLight.intensity = 0.55;
-    this.rimLight.color.set(0xffffff);
-    this.rimLight.intensity = 0.15;
+    this.hemiLight.color.set(night ? 0x3d4a78 : 0xbfd6ff);
+    this.hemiLight.groundColor.set(night ? 0x16110c : 0x5b4a36);
+    this.hemiLight.intensity = night ? 0.32 : 0.55;
+    this.rimLight.color.set(night ? 0xc58cff : 0xffffff);
+    this.rimLight.intensity = night ? 0.35 : 0.15;
     this.lampGlow.intensity = 0;
+    this.applyTimeOfDayPost();
 
     // Build city's track & desk diorama with all iconic towers and bridges
+    this.broadcast.reset();
     this.track = new RaceTrack(city);
     this.scene.add(this.track.group);
+    if (night) applyNightCity(this.track.group); // LED boards on the walls light up
     // Studs, apex blocks, rails etc. → a handful of draw calls (boost pads pulse, so they stay separate)
     this.track.mergeStats = mergeStaticMeshes(this.track.group, new Set(this.track.boostPadMeshes.map((p) => p.mesh)));
 
@@ -323,6 +353,17 @@ export class GameEngine {
     if (this.ui.minimapLabel) this.ui.minimapLabel.textContent = `${city.name.toUpperCase()} CIRCUIT`;
 
     this.spawnRacers();
+  }
+
+  /** Night races want a stronger bloom so floodlights, neon and the LED sphere glow. */
+  applyTimeOfDayPost() {
+    const night = !!this.night;
+    this.renderer.toneMappingExposure = night ? 0.7 : 0.62;
+    if (this.bloomPass) {
+      this.bloomPass.strength = night ? 0.62 : 0.18;
+      this.bloomPass.radius = night ? 0.6 : 0.5;
+      this.bloomPass.threshold = night ? 0.78 : 0.92;
+    }
   }
 
   spawnRacers() {
@@ -365,6 +406,10 @@ export class GameEngine {
         track: this.track,
         gridIndex: gridIdx,
       });
+      racer.field = this.racers;
+      racer.teamColor = entry.spec.bodyColor;
+      racer.nightSparks = !!this.night;
+      setCarNightLights(racer.rig.root, !!this.night);
       this.racers.push(racer);
       if (entry.isPlayer) this.player = racer;
     });
@@ -388,6 +433,8 @@ export class GameEngine {
     const st = this.settings;
     document.body.classList.toggle('colorblind', !!st.get('colorblind'));
     document.documentElement.style.setProperty('--ui-scale', String(st.get('uiScale') || 1));
+    // rules are locked in at the start of each race (see startRace)
+    if (this.state !== 'RACING' && this.state !== 'COUNTDOWN') raceRules.strict = !st.get('arcadeRules');
   }
 
   setPlayerName(name) {
@@ -510,6 +557,10 @@ export class GameEngine {
   startRace() {
     this.telemetry = new RaceTelemetry();
     this.physAcc = 0;
+    raceRules.strict = !this.settings.get('arcadeRules');
+    this.crashDirector.reset();
+    this.broadcast.reset();
+    clearTimeout(this.dsqTimer);
     this.loadGhost(this.currentCity.id);
     this.sound.init();
     this.particles.clearSkids();
@@ -535,6 +586,8 @@ export class GameEngine {
 
   backToMenu() {
     this.state = 'MENU';
+    this.crashDirector.reset();
+    clearTimeout(this.dsqTimer);
     this.clearGhost();
     this.sound.setMusicIntensity('menu');
     if (this.pendingHdRebuild) {
@@ -611,7 +664,8 @@ export class GameEngine {
   }
 
   resetPlayerCar() {
-    if (this.player && this.state === 'RACING') this.player.resetToRoad();
+    const p = this.player;
+    if (p && this.state === 'RACING' && !p.crash && !p.dsq) p.resetToRoad();
   }
 
   snapCameraBehindPlayer() {
@@ -663,6 +717,9 @@ export class GameEngine {
 
   getStandings() {
     return [...this.racers].sort((a, b) => {
+      // disqualified cars are classified last, in the order they were black-flagged
+      if (!!a.dsq !== !!b.dsq) return a.dsq ? 1 : -1;
+      if (a.dsq && b.dsq) return b.totalProgress - a.totalProgress;
       if (a.finished && b.finished) return a.finishTime - b.finishTime;
       if (a.finished) return -1;
       if (b.finished) return 1;
@@ -673,6 +730,11 @@ export class GameEngine {
   showFinishModal() {
     const standings = this.getStandings();
     const playerRank = standings.findIndex((r) => r.isPlayer) + 1;
+    this.crashDirector.flag.classList.add('hidden');
+    if (this.player.dsq) {
+      this.showDsqModal(standings);
+      return;
+    }
 
     this.ui.finishBadge.textContent = `CHECKERED FLAG • ${this.currentCity.name.toUpperCase()} GP (${this.currentCity.nativeName})`;
     this.ui.finishTitle.textContent = `${playerRank}${ordinalSuffix(playerRank).toUpperCase()} PLACE!`;
@@ -685,22 +747,132 @@ export class GameEngine {
 
     this.ui.finishStandings.innerHTML = standings
       .map((r, idx) => {
-        const timeStr = r.finished ? formatTime(r.finishTime) : `LAP ${r.lap}/${TOTAL_LAPS}`;
-        return `<div class="standing-row ${r.isPlayer ? 'is-player' : ''}">
-          <span>#${idx + 1} ${r.name}</span>
+        const timeStr = r.dsq ? 'DSQ' : r.finished ? formatTime(r.finishTime) : `LAP ${r.lap}/${TOTAL_LAPS}`;
+        return `<div class="standing-row ${r.isPlayer ? 'is-player' : ''} ${r.dsq ? 'is-dsq' : ''}">
+          <span>${r.dsq ? 'DSQ' : `#${idx + 1}`} ${r.name}</span>
           <span class="mono">${timeStr}</span>
         </div>`;
       })
       .join('');
 
     this.ui.finishOverlay.classList.remove('hidden');
+    this.ui.finishOverlay.classList.remove('dsq');
     this.ui.speedLines.classList.add('hidden');
-    this.recordLeaderboard(playerRank);
+    if (raceRules.strict) this.recordLeaderboard(playerRank);
+    else this.showLeaderboardNote('Arcade rules: this time is not sent to the leaderboard. Turn off Arcade rules in Settings to set an official time.');
     this.sound.playFanfare();
     this.particles.emitConfetti(this.player.pos, 65);
   }
 
+  /** The stewards' verdict: no classification, no leaderboard time. */
+  showDsqModal(standings) {
+    const p = this.player;
+    this.ui.finishBadge.textContent = `BLACK FLAG • ${this.currentCity.name.toUpperCase()} GP (${this.currentCity.nativeName})`;
+    this.ui.finishTitle.textContent = 'DISQUALIFIED';
+    this.ui.finishTotalTime.textContent = 'DSQ';
+    this.ui.finishBestLap.textContent = Number.isFinite(p.bestLapTime) ? formatTime(p.bestLapTime) : '—';
+    this.ui.finishTopSpeed.textContent = `${p.topSpeedKmh} KM/H`;
+    const why = p.dsq.replace(/^\w/, (c) => c.toUpperCase()).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+    const reason = `<div class="dsq-reason">Reason: ${why}</div>`;
+    this.ui.finishStandings.innerHTML =
+      reason +
+      standings
+        .map((r, idx) => {
+          const timeStr = r.dsq ? 'DSQ' : r.finished ? formatTime(r.finishTime) : `LAP ${r.lap}/${TOTAL_LAPS}`;
+          return `<div class="standing-row ${r.isPlayer ? 'is-player' : ''} ${r.dsq ? 'is-dsq' : ''}">
+          <span>${r.dsq ? 'DSQ' : `#${idx + 1}`} ${r.name}</span>
+          <span class="mono">${timeStr}</span>
+        </div>`;
+        })
+        .join('');
+    this.ui.finishOverlay.classList.remove('hidden');
+    this.ui.finishOverlay.classList.add('dsq');
+    this.ui.speedLines.classList.add('hidden');
+    this.showLeaderboardNote('Only clean races count: a disqualified run is not sent to the leaderboard.');
+  }
+
+  showLeaderboardNote(text) {
+    const ui = this.ui;
+    if (!ui.finishLbList) return;
+    this.raceCounter = (this.raceCounter || 0) + 1; // cancel any pending save from an earlier race
+    ui.finishLbTitle.textContent = `TOP 10 • ${this.currentCity.name.toUpperCase()}`;
+    ui.finishLbList.innerHTML = '<div class="lb-empty">Loading…</div>';
+    ui.finishLbStatus.textContent = text;
+    const raceId = this.raceCounter;
+    fetchTop10(this.currentCity.id).then(({ rows }) => {
+      if (raceId === this.raceCounter) renderLeaderboard(ui.finishLbList, rows, null);
+    });
+  }
+
+  /** Called when the crash replay ends. */
+  afterPlayerCrash(strict) {
+    if (this.state !== 'RACING' && this.state !== 'FINISHED') return;
+    const p = this.player;
+    if (strict || p.dsq) {
+      if (this.state === 'RACING') {
+        this.state = 'FINISHED';
+        this.showFinishModal();
+      }
+    } else {
+      p.crash = null;
+      p.resetToRoad();
+      this.snapCameraBehindPlayer();
+    }
+  }
+
+  /** Stewards' decisions and incidents raised by the physics this frame. */
+  processRaceEvents() {
+    const dir = this.crashDirector;
+    for (const r of this.racers) {
+      if (!r.events.length) continue;
+      const evs = r.events.splice(0);
+      for (const ev of evs) {
+        if (r.isPlayer) {
+          if (ev.type === 'limits') {
+            if (!raceRules.strict) dir.showFlag('limits', 'TRACK LIMITS', 'Keep all four wheels inside the white line', 2200);
+            else if (ev.strike < ev.max) {
+              dir.showFlag('limits', `TRACK LIMITS • WARNING ${ev.strike}/${ev.max - 1}`, ev.strike === ev.max - 1 ? 'Next offence: disqualification' : 'Keep all four wheels inside the white line', 2600);
+              this.sound.playBeep(false);
+            }
+          } else if (ev.type === 'crash') {
+            if (this.state === 'RACING' || this.state === 'FINISHED') dir.playerCrash(r, ev.reason, ev.impact, raceRules.strict);
+          } else if (ev.type === 'dsq' && this.state === 'RACING') {
+            dir.showFlag('black', 'BLACK FLAG • DISQUALIFIED', ev.reason.replace(/^\w/, (c) => c.toUpperCase()), 4000);
+            this.sound.playCrash(0.25);
+            clearTimeout(this.dsqTimer);
+            this.dsqTimer = setTimeout(() => {
+              if (this.state === 'RACING' && this.player.dsq) {
+                this.state = 'FINISHED';
+                this.showFinishModal();
+              }
+            }, 2000);
+          }
+        } else if (this.state === 'RACING') {
+          if (ev.type === 'crash') {
+            dir.rivalCrash(r, ev.reason);
+            if (!this.player.dsq) dir.showFlag('yellow', 'YELLOW FLAG', 'Incident ahead: debris on track', 2600);
+          } else if (ev.type === 'dsq') this.showToast(`⚑ ${r.name} DISQUALIFIED: ${ev.reason}`, 3500);
+        }
+      }
+    }
+    // marshals recover wrecks and black-flagged cars once they're out of view
+    for (const r of this.racers) {
+      if (r.isPlayer || r.retired || !r.dsq) continue;
+      const settled = r.crash ? r.crash.t > 4 : r.dsqTime > 4;
+      if (!settled) continue;
+      const d = r.pos.distanceTo(this.camera.position);
+      const toCar = r.pos.clone().sub(this.camera.position).normalize();
+      const fwd = new THREE.Vector3();
+      this.camera.getWorldDirection(fwd);
+      if (d > 90 || toCar.dot(fwd) < 0.2) {
+        r.retired = true;
+        r.rig.root.visible = false;
+      }
+    }
+  }
+
   updateCamera(dt) {
+    if (this.state !== 'MENU' && this.crashDirector.updateCamera(dt)) return;
     if (this.state === 'MENU') {
       const angle = this.elapsed * 0.16 + 0.55;
       const radius = 122;
@@ -764,14 +936,24 @@ export class GameEngine {
       desiredPos.set(p.pos.x + fwdX * bumperFwd, p.pos.y + bumperUp, p.pos.z + fwdZ * bumperFwd);
       desiredLook.set(p.pos.x + fwdX * 32 + rightX * lookPan * 1.5, p.pos.y + 1.1, p.pos.z + fwdZ * 32 + rightZ * lookPan * 1.5);
       targetFov = p.isBoosting ? 88 : 74 + Math.min(9, (Math.abs(p.speed) / 56) * 9);
+    } else if (mode === 'TV') {
+      // broadcast director: trackside long-lens cameras, cutting from one to the next
+      const shot = this.broadcast.tvShot(p);
+      desiredPos.copy(shot.pos);
+      desiredLook.copy(shot.look);
+      targetFov = shot.fov;
+      if (shot.cut) {
+        this.camLook.copy(shot.look);
+        this.camera.fov = shot.fov;
+      }
     } else {
       desiredPos.set(p.pos.x * 0.55, 58, p.pos.z * 0.55 + 58);
       desiredLook.set(p.pos.x * 0.72, 2, p.pos.z * 0.72);
       targetFov = 54;
     }
 
-    const smooth = mode === 'HOOD' || mode === 'BUMPER' ? 22 : 8.2;
-    if (mode === 'HOOD' || mode === 'BUMPER') {
+    const smooth = mode === 'HOOD' || mode === 'BUMPER' ? 22 : mode === 'TV' ? 14 : 8.2;
+    if (mode === 'HOOD' || mode === 'BUMPER' || mode === 'TV') {
       // Onboard cameras are bolted to the car: no positional lag, or they end up inside the body at speed
       this.camPos.copy(desiredPos);
     } else {
@@ -782,7 +964,7 @@ export class GameEngine {
     // Visceral speed vibration & collision camera shake
     const speedVibration = this.state === 'RACING' && p.isBoosting ? 0.14 : Math.max(0, (Math.abs(p.speed) - 42) * 0.0025);
     const shakeScale = this.settings.get('reducedShake') ? 0.12 : 1.0;
-    const totalShake = (speedVibration + p.impactShake * 0.45) * (mode === 'DESK TOP' ? 0.3 : 1.0) * shakeScale;
+    const totalShake = (speedVibration + p.impactShake * 0.45) * (mode === 'DESK TOP' ? 0.3 : mode === 'TV' ? 0 : 1.0) * shakeScale;
     const shakeX = (Math.random() - 0.5) * totalShake;
     const shakeY = (Math.random() - 0.5) * totalShake;
 
@@ -976,7 +1158,7 @@ export class GameEngine {
       this.sound.updateEngine(0.2, false, false, true);
     } else if (this.state === 'RACING' || this.state === 'FINISHED') {
       // Fixed 120 Hz physics steps, independent of the display frame rate
-      this.physAcc = Math.min((this.physAcc || 0) + dt, 0.25);
+      this.physAcc = Math.min((this.physAcc || 0) + dt * this.timeScale, 0.25);
       let steps = 0;
       while (this.physAcc >= PHYS_STEP && steps < 40) {
         this.physAcc -= PHYS_STEP;
@@ -994,14 +1176,16 @@ export class GameEngine {
           this.showFinishModal();
         }
       }
+      this.processRaceEvents();
       if (this.ghost) this.ghost.update(this.raceTime);
 
       const speedRatio = Math.abs(this.player.speed) / this.player.maxSpeed;
       this.sound.updateEngine(speedRatio, this.player.isDrifting, this.player.isBoosting, this.state === 'RACING');
     }
 
-    this.particles.update(dt);
+    this.particles.update(dt * this.timeScale);
     this.updateTiltCoach(dt);
+    this.broadcast.update(dt);
     this.updateCamera(dt);
     this.updateHUD();
 
@@ -1013,5 +1197,6 @@ export class GameEngine {
     }
     if (this.composer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
+    this.crashDirector.renderPip(dt);
   }
 }

@@ -769,6 +769,7 @@ export function buildRealWorld(group, city, track, avoid = []) {
   const anim = { water: [] };
 
   const groundMat = new THREE.MeshStandardMaterial({ map: groundTexture(a.ground), roughness: 0.95, metalness: 0 });
+  groundMat.userData.nightDim = 0.4;
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400), groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.02;
@@ -780,6 +781,7 @@ export function buildRealWorld(group, city, track, avoid = []) {
     new THREE.PlaneGeometry(196, 128),
     new THREE.MeshStandardMaterial({ color: 0x77746d, roughness: 0.9 })
   );
+  plaza.material.userData.nightDim = 0.45;
   plaza.rotation.x = -Math.PI / 2;
   plaza.position.y = -0.01;
   plaza.receiveShadow = true;
@@ -806,8 +808,9 @@ export function buildRealWorld(group, city, track, avoid = []) {
   }
 
   buildFlyoverPiers(group, track);
-  const standFootprint = buildCrowdStands(group, track);
-  const fullAvoid = [...avoid, standFootprint];
+  const stands = buildGrandstands(group, track, city, avoid, r);
+  anim.stands = stands;
+  const fullAvoid = [...avoid, ...stands];
   // Continuous street frontage just behind the barrier walls and footpaths
   const frontage = buildFrontage(group, r, a, city, track, fullAvoid);
   buildSkyline(group, r, a);
@@ -919,6 +922,7 @@ function shopfrontTextures() {
     map.colorSpace = THREE.SRGBColorSpace;
     map.wrapS = map.wrapT = THREE.RepeatWrapping;
     map.anisotropy = 8;
+    map.userData.nightGlow = 0.45; // lit shop fronts at night
     const rough = keep(new THREE.CanvasTexture(rc));
     rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
     return { map, rough };
@@ -957,7 +961,7 @@ function buildFrontage(group, r, a, city, track, avoid) {
   const tall = prof.maxH >= 40;
   const hMin = a.roofs === 'mansard' ? 14 : tall ? 11 : 8;
   const hMax = a.roofs === 'mansard' ? 18 : THREE.MathUtils.clamp(prof.maxH * 0.3, 14, 42);
-  const FRONT = 17.2; // building line, behind the 16.5 footpath edge
+  const FRONT = 18.6; // building line, behind the 17.6 service-road edge
   const SHOP_H = 4.2;
   const max = Q.tier === 'low' ? 70 : 120;
 
@@ -1389,14 +1393,14 @@ function buildTrees(group, r, a, track, avoid) {
       const s = track.samples[(r() * N) | 0];
       if (s.point.y > 1.0) continue;
       const side = r() < 0.5 ? -1 : 1;
-      const off = 11.4 + v.radius * 0.45 + r() * 4.5; // on the footpath, behind the barrier wall
+      const off = 13.6 + v.radius * 0.4 + r() * 3.5; // on the service road verge, behind the barrier
       x = s.point.x + s.right.x * side * off;
       z = s.point.z + s.right.z * side * off;
     } else {
       x = (r() - 0.5) * 200;
       z = (r() - 0.5) * 140;
     }
-    const clear = 11 + v.radius * 0.3;
+    const clear = 13.2 + v.radius * 0.25;
     if (distToTrackSq(track, x, z) < clear * clear) continue;
     if (blocked(avoid, x, z, v.radius * 0.6)) continue;
     heroPlacements[vi].push({ x, z, s: 0.8 + r() * 0.45, rot: r() * Math.PI * 2 });
@@ -1504,78 +1508,190 @@ function buildSimpleTrees(group, r, a, track, avoid) {
 }
 
 /* ---------- Grandstand ---------- */
-function buildCrowdStands(group, track) {
-  const f = track.getFrameAt(0.04);
-  const stand = new THREE.Group();
-  const concrete = new THREE.MeshStandardMaterial({ color: 0x9c9890, roughness: 0.85 });
-  const roof = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.4, metalness: 0.5 });
-  for (let i = 0; i < 6; i++) {
-    const step = new THREE.Mesh(new THREE.BoxGeometry(40, 0.8, 2), concrete);
-    step.position.set(0, 0.4 + i * 0.8, -i * 2);
-    step.castShadow = step.receiveShadow = true;
-    stand.add(step);
-  }
-  // Stadium seats + seated spectators (capsule torsos, varied skin and clothing)
-  const seatGeo = new THREE.BoxGeometry(0.5, 0.42, 0.45);
+/** Shared clock for the cheering crowd (advanced by DeskWorld.update). */
+export const crowdClock = { value: 0 };
+
+/**
+ * Grand-prix grandstands along the straights, outside the circuit: tiered concrete,
+ * packed with fans in team colours who bob and cheer. Returns footprints to keep clear.
+ */
+function buildGrandstands(group, track, city, avoid, r) {
+  const S = track.samples;
+  const N = S.length;
+  const poly = S.map((s) => [s.point.x, s.point.z]);
+  const lap = track.totalLength;
+  const step = lap / N;
+  const low = Q.tier === 'low';
+  const concrete = new THREE.MeshStandardMaterial({ color: 0xa9a59c, roughness: 0.85 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0xe8eaec, roughness: 0.35, metalness: 0.55 });
+  roofMat.userData.nightDim = 0.3;
+  const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa1a8, roughness: 0.4, metalness: 0.7 });
   const seatMat = new THREE.MeshStandardMaterial({ color: 0x1f4e8c, roughness: 0.55 });
-  const torso = new THREE.CapsuleGeometry(0.2, 0.42, 2, 6);
   const clothMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
-  const head = new THREE.SphereGeometry(0.15, 7, 5);
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 });
-  const MAXP = 6 * 66;
-  const seats = new THREE.InstancedMesh(seatGeo, seatMat, MAXP);
-  const crowd = new THREE.InstancedMesh(torso, clothMat, MAXP);
-  const heads = new THREE.InstancedMesh(head, skinMat, MAXP);
-  const dummy = new THREE.Object3D();
-  const c = new THREE.Color();
-  const shirts = [0xe8e6e1, 0x2b2f36, 0x3b5b8a, 0x8a2f2f, 0xc9a227, 0x4f6b3a, 0x6d4c7d, 0xd9d2c3, 0x1f1f1f, 0xb85c38, 0x5d7a99];
-  const skins = [0x8d5524, 0xc68642, 0xa0662f, 0x6b4423, 0xe0ac69, 0x7a4a2a];
-  let ns = 0;
-  let np = 0;
-  for (let row = 0; row < 6; row++) {
-    for (let j = 0; j < 66; j++) {
-      const jx = -19.5 + j * 0.6;
-      const y = 0.8 + row * 0.8;
-      const z = -row * 2 - 0.4;
-      dummy.position.set(jx, y + 0.21, z);
-      dummy.rotation.set(0, 0, 0);
-      dummy.scale.setScalar(1);
-      dummy.updateMatrix();
-      seats.setMatrixAt(ns++, dummy.matrix);
-      if (Math.random() < 0.1) continue; // empty seat
-      const lean = (Math.random() - 0.5) * 0.25;
-      dummy.position.set(jx + (Math.random() - 0.5) * 0.08, y + 0.82, z + 0.05);
-      dummy.rotation.set(lean * 0.4, (Math.random() - 0.5) * 0.5, lean);
-      dummy.scale.set(1, 0.9 + Math.random() * 0.2, 0.85);
-      dummy.updateMatrix();
-      crowd.setMatrixAt(np, dummy.matrix);
-      c.setHex(shirts[(Math.random() * shirts.length) | 0]);
-      crowd.setColorAt(np, c);
-      dummy.position.y += 0.56;
-      dummy.scale.setScalar(1);
-      dummy.updateMatrix();
-      heads.setMatrixAt(np, dummy.matrix);
-      c.setHex(skins[(Math.random() * skins.length) | 0]);
-      heads.setColorAt(np, c);
-      np++;
+  const cheer = (m) => {
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.crowdTime = crowdClock;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float crowdTime;')
+        .replace(
+          '#include <begin_vertex>',
+          '#include <begin_vertex>\nfloat ph = float(gl_InstanceID) * 2.399;\n' +
+            'transformed.y += max(0.0, sin(crowdTime * (4.0 + mod(ph, 3.0)) + ph)) * 0.09;'
+        );
+    };
+  };
+  cheer(clothMat);
+  cheer(skinMat);
+  const torso = new THREE.CapsuleGeometry(0.19, 0.4, 2, 6);
+  const head = new THREE.SphereGeometry(0.14, 7, 5);
+  const seatGeo = new THREE.BoxGeometry(0.48, 0.4, 0.42);
+  const shirts = [0xff8000, 0xd40000, 0x111111, 0xf2f2f2, 0x1e3a8a, 0xffd400, 0x0b6e4f, 0xff8000, 0xd40000, city.accentHex, city.secondaryHex, 0x6b7280];
+  const skins = [0x8d5524, 0xc68642, 0xa0662f, 0x6b4423, 0xe0ac69, 0x7a4a2a, 0xf1c27d];
+
+  const outsideSide = (s) => {
+    const p = s.point.clone().addScaledVector(s.right, 22);
+    return pointInPolygon(poly, p.x, p.z) ? -1 : 1;
+  };
+  const straightAt = (i, half) => {
+    for (let k = -half; k <= half; k++) {
+      const q = S[(i + k + N) % N];
+      if (q.curvature > 0.1 || q.point.y > 0.6) return false;
     }
+    return true;
+  };
+
+  // candidate spots: the start straight first, then the longest other straights
+  const spots = [];
+  const want = low ? 2 : 4;
+  const tryAdd = (i, len) => {
+    const half = Math.ceil(len / 2 / step);
+    if (!straightAt(i, half)) return false;
+    const s = S[i];
+    const side = outsideSide(s);
+    const depth = (low ? 9 : 14) * 1.05 + 2;
+    const off = 14.2 + depth / 2;
+    const cx = s.point.x + s.right.x * side * off;
+    const cz = s.point.z + s.right.z * side * off;
+    if (spots.some((p) => Math.hypot(p.cx - cx, p.cz - cz) < len)) return false;
+    if (blocked(avoid, cx, cz, len * 0.3)) return false;
+    // the far edge must not reach another part of the track
+    for (const q of S) if (Math.hypot(q.point.x - cx, q.point.z - cz) < off - 1) return false;
+    spots.push({ i, len, side, cx, cz, depth });
+    return true;
+  };
+  tryAdd(Math.round(0.04 * N), 48) || tryAdd(Math.round(0.07 * N), 44);
+  const order = [...Array(N).keys()].sort(() => r() - 0.5);
+  for (const i of order) {
+    if (spots.length >= want) break;
+    tryAdd(i, 36 + Math.round(r() * 10));
   }
-  seats.count = ns;
-  crowd.count = heads.count = np;
-  crowd.castShadow = true;
-  stand.add(seats, crowd, heads);
-  const canopy = new THREE.Mesh(new THREE.BoxGeometry(42, 0.3, 14), roof);
-  canopy.position.set(0, 9, -5);
-  canopy.castShadow = true;
-  stand.add(canopy);
-  for (const x of [-20, 0, 20]) {
-    const colm = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 9, 8), roof);
-    colm.position.set(x, 4.5, -11);
-    stand.add(colm);
-  }
-  const pos = f.point.clone().addScaledVector(f.right, 14);
-  stand.position.set(pos.x, 0, pos.z);
-  stand.lookAt(f.point.x, 0, f.point.z);
-  group.add(stand);
-  return { x: pos.x, z: pos.z, r: 24 };
+
+  const footprints = [];
+  const dummy = new THREE.Object3D();
+  const col = new THREE.Color();
+  spots.forEach((spot, si) => {
+    const s = S[spot.i];
+    const rows = low ? 9 : si === 0 ? 16 : 13;
+    const rise = 0.62;
+    const run = 1.05;
+    const g = new THREE.Group();
+    const front = s.point.clone().addScaledVector(s.right, spot.side * 14.2);
+    g.position.set(front.x, 0, front.z);
+    // local axes: +X along the track, +Z away from it
+    const zAxis = s.right.clone().multiplyScalar(spot.side).setY(0).normalize();
+    const xAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), zAxis).normalize();
+    g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, new THREE.Vector3(0, 1, 0), zAxis));
+
+    // stepped concrete terraces: one extruded stair profile
+    const prof = new THREE.Shape();
+    prof.moveTo(0, 0);
+    for (let k = 0; k < rows; k++) {
+      prof.lineTo(k * run, (k + 1) * rise + 0.4);
+      prof.lineTo((k + 1) * run, (k + 1) * rise + 0.4);
+    }
+    prof.lineTo(rows * run, 0);
+    prof.closePath();
+    const tg = new THREE.ExtrudeGeometry(prof, { depth: spot.len, bevelEnabled: false });
+    tg.rotateY(-Math.PI / 2); // profile (z, y), extrude along x
+    tg.translate(spot.len / 2, 0, 0);
+    const terraces = new THREE.Mesh(tg, concrete);
+    terraces.castShadow = !low;
+    terraces.receiveShadow = true;
+    g.add(terraces);
+
+    // front railing and side walls
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(spot.len, 0.08, 0.08), railMat);
+    rail.position.set(0, 1.55, 0.1);
+    g.add(rail);
+    for (const sx of [-spot.len / 2, spot.len / 2]) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(0.4, rows * rise + 1.6, rows * run), concrete);
+      wall.position.set(sx, (rows * rise + 1.6) / 2, (rows * run) / 2);
+      wall.castShadow = !low;
+      g.add(wall);
+    }
+    if (si === 0 || r() < 0.5) {
+      const roofY = rows * rise + 4.6;
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(spot.len + 1, 0.3, rows * run + 2), roofMat);
+      roof.position.set(0, roofY, (rows * run) / 2 - 0.6);
+      roof.rotation.x = -0.06;
+      roof.castShadow = !low;
+      g.add(roof);
+      for (let x = -spot.len / 2; x <= spot.len / 2 + 0.1; x += spot.len / 4) {
+        const colm = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, roofY, 8), railMat);
+        colm.position.set(x, roofY / 2, rows * run + 0.4);
+        g.add(colm);
+      }
+    }
+
+    // the crowd
+    const cols = Math.floor(spot.len / 0.6) - 1;
+    const maxP = rows * cols;
+    const seats = new THREE.InstancedMesh(seatGeo, seatMat, maxP);
+    const people = new THREE.InstancedMesh(torso, clothMat, maxP);
+    const heads = new THREE.InstancedMesh(head, skinMat, maxP);
+    let ns = 0;
+    let np = 0;
+    const fill = si === 0 ? 0.96 : 0.9;
+    for (let k = 0; k < rows; k++) {
+      for (let j = 0; j < cols; j++) {
+        const x = -spot.len / 2 + 0.6 + j * 0.6;
+        const y = (k + 1) * rise + 0.4;
+        const z = k * run + run * 0.55;
+        dummy.position.set(x, y + 0.2, z + 0.15);
+        dummy.rotation.set(0, Math.PI, 0);
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        seats.setMatrixAt(ns++, dummy.matrix);
+        if (r() > fill) continue;
+        const standing = r() < 0.35;
+        dummy.position.set(x + (r() - 0.5) * 0.1, y + (standing ? 1.0 : 0.78), z + (standing ? -0.15 : 0.05));
+        dummy.rotation.set((r() - 0.5) * 0.15, Math.PI + (r() - 0.5) * 0.5, (r() - 0.5) * 0.2);
+        dummy.scale.set(1, standing ? 1.15 : 0.95, 0.85);
+        dummy.updateMatrix();
+        people.setMatrixAt(np, dummy.matrix);
+        col.setHex(shirts[(r() * shirts.length) | 0]);
+        people.setColorAt(np, col);
+        dummy.position.y += standing ? 0.62 : 0.54;
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        heads.setMatrixAt(np, dummy.matrix);
+        col.setHex(skins[(r() * skins.length) | 0]);
+        heads.setColorAt(np, col);
+        np++;
+      }
+    }
+    seats.count = ns;
+    people.count = heads.count = np;
+    people.castShadow = !low;
+    for (const m of [seats, people, heads]) {
+      m.instanceMatrix.needsUpdate = true;
+      if (m.instanceColor) m.instanceColor.needsUpdate = true;
+      m.computeBoundingSphere();
+    }
+    g.add(seats, people, heads);
+    group.add(g);
+    footprints.push({ x: spot.cx, z: spot.cz, r: spot.len * 0.55 });
+  });
+  return footprints;
 }

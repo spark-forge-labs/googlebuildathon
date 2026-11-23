@@ -490,6 +490,53 @@ export const WORLD_CITIES = [
     ],
     waypoints: loop({ 2: [-3, 1], 4: [-1, 3], 6: [0, 0], 14: [0, -1] }),
   },
+  {
+    id: 'lasvegas',
+    region: 'world',
+    name: 'Las Vegas',
+    nativeName: 'Nevada',
+    night: true, // floodlit night race on the Strip
+    subtitle: 'Night race • The Strip • LED Sphere • Fountains • Neon',
+    nitroName: 'JACKPOT NITRO',
+    badgeColor: '#e879f9',
+    accentHex: 0xd946ef,
+    secondaryHex: 0x22d3ee,
+    skyTop: 0x05060f,
+    skyBottom: 0x2a1530,
+    fogColor: 0x140d1e,
+    sunColor: 0xe4ecff,
+    sunIntensity: 2.3,
+    hemiSky: 0x4b5a8c,
+    hemiGround: 0x1a1410,
+    mugPos: { x: -48, z: 20 },
+    bookRamps: [],
+    bridgeStyle: 'viaduct',
+    bridgeUs: [0.56, 0.66],
+    bridgeWaterU: null,
+    boostPadsU: [0.08, 0.27, 0.47, 0.64, 0.87],
+    stickyNotes: ['LAS VEGAS\nNIGHT GP\n3 LAPS!', 'ALL IN\nON NITRO!', 'WHAT HAPPENS\nON THE STRIP...'],
+    aiNames: ['Neon Nomad', 'Desert Ace', 'Jackpot Jett', 'High Card Hal', 'Midnight Maverick'],
+    billboards: [
+      { u: 0.15, side: 1, title: 'THE STRIP', sub: 'LAS VEGAS BOULEVARD', bg: '#2e1065', acc: '#f0abfc' },
+      { u: 0.32, side: 1, title: 'LED SPHERE', sub: 'EAST OF THE STRIP', bg: '#0c4a6e', acc: '#67e8f9' },
+      { u: 0.44, side: -1, title: 'FOUNTAIN LAKE', sub: 'SHOWS EVERY 15 MIN', bg: '#1e3a8a', acc: '#bfdbfe' },
+      { u: 0.61, side: 1, title: 'FREMONT FLYOVER', sub: 'DOWNTOWN', bg: '#7c2d12', acc: '#fed7aa' },
+      { u: 0.84, side: -1, title: 'DESERT STAR', sub: 'RESORT • CASINO', bg: '#713f12', acc: '#fde68a' },
+    ],
+    zones: [
+      { uStart: 0.0, uEnd: 0.15, te: 'The Strip', en: 'STRIP STRAIGHT START' },
+      { uStart: 0.15, uEnd: 0.31, te: 'Sphere', en: 'LED SPHERE SWEEP' },
+      { uStart: 0.31, uEnd: 0.47, te: 'Fountains', en: 'FOUNTAIN LAKE ESSES' },
+      { uStart: 0.47, uEnd: 0.72, te: 'Fremont', en: 'FREMONT FLYOVER' },
+      { uStart: 0.72, uEnd: 0.89, te: 'Casino Row', en: 'CASINO ROW HAIRPIN' },
+      { uStart: 0.89, uEnd: 1.01, te: 'Boulevard', en: 'NEON FINISH STRAIGHT' },
+    ],
+    waypoints: [
+      [-38, 0.16, 46], [6, 0.16, 46], [50, 0.16, 45], [77, 0.16, 32], [80, 0.16, 6],
+      [70, 0.16, -20], [45, 0.35, -38], [18, 3.3, -41], [-6, 6.2, -38], [-30, 6.2, -30],
+      [-52, 3.2, -16], [-72, 0.4, 2], [-78, 0.16, 25], [-72, 0.16, 41], [-56, 0.16, 46],
+    ],
+  },
 ];
 
 /**
@@ -520,4 +567,7 @@ export const WORLD_ATMOS = {
                   skyline: { tall: 0.6,  maxH: 170, styles: [0.4, 0.2, 0.4, 0, 0, 0] }, roofs: 'plain', trees: [2, 1, 3, 2, 2], mountains: true },
   bangkok:      { elev: 20, azim: 250, turbidity: 9,  rayleigh: 2.0, ground: 'tropical', coast: null, haze: 0xd6c4ac, hdri: 'venice_sunset_1k.hdr',
                   skyline: { tall: 0.3,  maxH: 140, styles: [0.4, 0.2, 0.35, 0.05, 0, 0] }, roofs: 'indian', trees: [2, 1, 3, 2, 2] },
+  // night race: elev/azim give the floodlight direction (high, so shadows sit under the cars)
+  lasvegas:     { night: true, elev: 64, azim: 150, turbidity: 2, rayleigh: 1, ground: 'dry', coast: null, haze: 0x150f22, hdri: null,
+                  skyline: { tall: 0.55, maxH: 160, styles: [0.6, 0.25, 0.1, 0, 0, 0.05] }, roofs: 'plain', trees: [0, 0, 0, 1, 3], palms: true },
 };

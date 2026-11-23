@@ -27,6 +27,7 @@ const DEFAULTS = {
   uiScale: 1,
   ghost: true,
   haptics: true,
+  arcadeRules: false, // false = strict race rules (crash / track limits / wrong way = DSQ)
   keys: DEFAULT_KEYS,
 };
 
