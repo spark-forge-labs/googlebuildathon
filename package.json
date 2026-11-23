@@ -4,15 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 5173",
+    "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
     "dev:phone": "vite --mode phone",
     "gen:tracks": "node scripts/gen-track-data.mjs"
   },
   "dependencies": {
     "@dgreenheck/ez-tree": "^1.1.0",
     "meshoptimizer": "^1.3.0",
+    "qrcode": "^1.5.4",
     "three": "^0.170.0"
   },
   "devDependencies": {

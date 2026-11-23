@@ -50,6 +50,13 @@
         </div>
 
         <div class="hud-top-right">
+          <button id="btn-cast-hud" class="hud-btn cast-btn" title="Cast to TV & Play with Your Phone">
+            <svg class="cast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 16.1A5 5 0 0 1 5.9 20M2 12.05A9 9 0 0 1 9.95 20M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/>
+              <line x1="2" y1="20" x2="2.01" y2="20"/>
+            </svg>
+            <span id="cast-hud-label">CAST TV</span>
+          </button>
           <button id="btn-motion-hud" class="hud-btn" title="Mobile Steering Wheel Sensor">WHEEL: OFF</button>
           <button id="btn-camera" class="hud-btn" title="Switch Camera (C)">CAM: CHASE</button>
           <button id="btn-audio" class="hud-btn" title="Toggle Sound (M)">SFX: ON</button>
@@ -128,7 +135,16 @@
       <!-- Start Menu Overlay -->
       <div id="start-overlay" class="overlay">
         <div class="menu-panel">
-          <div class="menu-badge">INDIA GP WORLD TOUR • 27 CITY CIRCUITS</div>
+          <div class="menu-top-bar">
+            <div class="menu-badge">INDIA GP WORLD TOUR • 27 CITY CIRCUITS</div>
+            <button id="btn-cast-menu" class="cast-pill-btn" title="Cast to TV & Play with Your Phone">
+              <svg class="cast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 16.1A5 5 0 0 1 5.9 20M2 12.05A9 9 0 0 1 9.95 20M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/>
+                <line x1="2" y1="20" x2="2.01" y2="20"/>
+              </svg>
+              <span id="cast-menu-label">CAST TO TV</span>
+            </button>
+          </div>
           <h1 class="menu-title">INDIA <span>GP</span></h1>
           <p class="menu-subtitle" id="city-subtitle">
             Charminar • Hussain Sagar • Cable Bridge • Cyber Towers
@@ -178,6 +194,65 @@
             <button id="btn-settings" class="secondary-btn">SETTINGS</button>
           </div>
           <p class="menu-credits">Ferrari 458 Italia 3D model by vicent091036 (CC BY 4.0) • Trees by EZ-Tree • HDRIs from Poly Haven (CC0)</p>
+        </div>
+      </div>
+
+      <!-- Cast to TV & Phone Steering Wheel Modal -->
+      <div id="cast-modal" class="overlay hidden">
+        <div class="menu-panel cast-panel">
+          <div class="cast-modal-head">
+            <div class="cast-head-title">
+              <svg class="cast-icon lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 16.1A5 5 0 0 1 5.9 20M2 12.05A9 9 0 0 1 9.95 20M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/>
+                <line x1="2" y1="20" x2="2.01" y2="20"/>
+              </svg>
+              <div>
+                <h2>CAST TO TV &amp; PLAY WITH YOUR PHONE</h2>
+                <p>Display the 3D circuit on your TV and steer wirelessly from your phone!</p>
+              </div>
+            </div>
+            <button id="btn-close-cast" class="close-x-btn" aria-label="Close">✕</button>
+          </div>
+
+          <div class="cast-columns">
+            <div class="cast-col">
+              <div class="cast-step-tag">STEP 1 • TV DISPLAY</div>
+              <h3>Put Race on Your TV</h3>
+              <p class="cast-desc">
+                Cast this screen to Chromecast / AirPlay / Smart TV, or open the TV link directly on your Smart TV browser.
+              </p>
+              <button id="btn-launch-cast" class="primary-btn cast-action-btn">CAST / TV FULLSCREEN</button>
+              <div id="cast-status-msg" class="cast-status-msg">Ready to cast on local Wi-Fi</div>
+
+              <div class="url-box">
+                <span class="url-lbl">SMART TV URL</span>
+                <div class="url-row">
+                  <code id="cast-tv-url">http://localhost:5173</code>
+                  <button id="btn-copy-tv" class="mini-copy-btn">COPY</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="cast-col">
+              <div class="cast-step-tag">STEP 2 • PHONE STEERING WHEEL</div>
+              <h3>Scan QR with Your Phone</h3>
+              <div class="qr-card">
+                <canvas id="cast-qr-canvas" width="196" height="196"></canvas>
+              </div>
+              <div class="pair-pill" id="cast-pair-pill">
+                <span class="pair-dot" id="cast-pair-dot"></span>
+                <span id="cast-pair-text">WAITING FOR PHONE • ROOM <strong id="cast-room-code">----</strong></span>
+              </div>
+              <div class="url-box">
+                <span class="url-lbl">PHONE CONTROLLER LINK</span>
+                <div class="url-row">
+                  <code id="cast-phone-url">http://localhost:5173/?controller=----</code>
+                  <button id="btn-copy-phone" class="mini-copy-btn">COPY</button>
+                </div>
+              </div>
+              <button id="btn-test-controller" class="secondary-btn test-ctrl-btn">TRY PHONE WHEEL IN NEW TAB</button>
+            </div>
+          </div>
         </div>
       </div>
 
