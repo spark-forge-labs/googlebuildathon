@@ -10,6 +10,7 @@ import { Broadcast } from './broadcast.js';
 import { ParticleSystem } from './particles.js';
 import { SoundEngine } from './audio.js';
 import { MotionSteeringController } from './motionControls.js';
+import { TVHostBridge } from './remoteController.js';
 import { buildRealSky, loadHdriEnvironment, loadTreeLibrary, ensureTreeVariants } from './realWorld.js';
 import { preloadCarModel } from './carModels.js';
 import { Q } from './quality.js';
@@ -118,6 +119,34 @@ export class GameEngine {
 
     this.motion = new MotionSteeringController({
       onStatusChange: (status, message) => this.onMotionStatus(status, message),
+    });
+
+    this.remoteInput = {
+      active: false,
+      up: false,
+      down: false,
+      throttle: 0,
+      brake: 0,
+      drift: false,
+      boost: false,
+      steer: 0,
+      lastPacketAt: 0,
+    };
+
+    this.tvHost = new TVHostBridge({
+      onRemoteInput: (pkt) => {
+        this.remoteInput.active = true;
+        this.remoteInput.up = Boolean(pkt.up);
+        this.remoteInput.down = Boolean(pkt.down);
+        this.remoteInput.throttle = Number(pkt.throttle) || 0;
+        this.remoteInput.brake = Number(pkt.brake) || 0;
+        this.remoteInput.drift = Boolean(pkt.drift);
+        this.remoteInput.boost = Boolean(pkt.boost);
+        this.remoteInput.steer = Number(pkt.steer) || 0;
+        this.remoteInput.lastPacketAt = performance.now();
+      },
+      onRemoteAction: (action, value) => this.handleRemoteAction(action, value),
+      onConnectionChange: (connected, count) => this.onRemoteConnectionChange(connected, count),
     });
 
     this.playerName = '';
@@ -504,6 +533,41 @@ export class GameEngine {
 
   recenterMotionWheel() {
     this.motion.recenter();
+  }
+
+  handleRemoteAction(action, value) {
+    if (action === 'start_race') {
+      if (this.ui.castModal) this.ui.castModal.classList.add('hidden');
+      this.startRace();
+    } else if (action === 'cycle_camera') {
+      this.cycleCamera();
+    } else if (action === 'reset_car') {
+      this.resetPlayerCar();
+    } else if (action === 'select_city' && value) {
+      this.selectCity(value);
+      if (this.onCityChangedExternal) this.onCityChangedExternal();
+    }
+  }
+
+  onRemoteConnectionChange(connected, count) {
+    if (!connected) {
+      this.remoteInput.active = false;
+      this.remoteInput.up = false;
+      this.remoteInput.down = false;
+      this.remoteInput.drift = false;
+      this.remoteInput.boost = false;
+      this.remoteInput.steer = 0;
+    }
+    if (this.ui.btnCastMenu) this.ui.btnCastMenu.classList.toggle('linked', connected);
+    if (this.ui.btnCastHud) this.ui.btnCastHud.classList.toggle('linked', connected);
+    if (this.ui.castMenuLabel) this.ui.castMenuLabel.textContent = connected ? 'PHONE LINKED ✓' : 'CAST TO TV';
+    if (this.ui.castHudLabel) this.ui.castHudLabel.textContent = connected ? 'PHONE ✓' : 'CAST TV';
+    if (this.ui.castPairDot) this.ui.castPairDot.classList.toggle('online', connected);
+    if (this.ui.castPairText) {
+      this.ui.castPairText.innerHTML = connected
+        ? `PHONE STEERING WHEEL CONNECTED (${count}) • ROOM <strong>${this.tvHost.roomCode}</strong>`
+        : `WAITING FOR PHONE • ROOM <strong>${this.tvHost.roomCode}</strong>`;
+    }
   }
 
   onMotionStatus(status, message) {
@@ -1022,6 +1086,18 @@ export class GameEngine {
       }
     }
 
+    // Stream live F1-style dash telemetry back to paired Phone Controller
+    if (this.tvHost && this.tvHost.phoneConnected) {
+      this.tvHost.sendTelemetry({
+        city: this.currentCity.name,
+        pos: `${pos}${ordinalSuffix(pos)}`,
+        lap: `${Math.min(TOTAL_LAPS, p.lap)} / ${TOTAL_LAPS}`,
+        speed: kmh,
+        gear,
+        state: this.state,
+      });
+    }
+
     this.drawMinimap();
   }
 
@@ -1142,6 +1218,21 @@ export class GameEngine {
       this.input.analogSteer = pad.steer;
       this.input.analogThrottle = this.state === 'RACING' ? pad.throttle : 0;
       this.input.analogBrake = this.state === 'RACING' ? pad.brake : 0;
+    }
+    // Wireless Phone Steering Wheel (Cast-to-TV controller) drives analog + pedals when paired
+    const remoteFresh = this.remoteInput.active && performance.now() - this.remoteInput.lastPacketAt < 1500;
+    if (remoteFresh) {
+      if (Math.abs(this.remoteInput.steer) > 0.01) {
+        this.input.analogSteer = this.remoteInput.steer;
+      }
+      if (this.state === 'RACING') {
+        if (this.remoteInput.throttle > 0) this.input.analogThrottle = Math.max(this.input.analogThrottle, this.remoteInput.throttle);
+        else if (this.remoteInput.up) this.input.analogThrottle = 1;
+        if (this.remoteInput.brake > 0) this.input.analogBrake = Math.max(this.input.analogBrake, this.remoteInput.brake);
+        else if (this.remoteInput.down) this.input.analogBrake = 1;
+      }
+      if (this.remoteInput.drift) this.input.padDrift = true;
+      if (this.remoteInput.boost) this.input.padBoost = true;
     }
 
     this.steamTimer -= dt;

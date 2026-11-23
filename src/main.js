@@ -3,6 +3,18 @@ import { CITIES, REGIONS, getCityById } from './game/cities.js';
 import { CAR_CATALOG } from './game/cars.js';
 import { fetchTop10, renderLeaderboard, sanitizeName, leaderboardOnline } from './game/leaderboard.js';
 import { ACTIONS, keyLabel } from './game/settings.js';
+import { launchPhoneControllerMode } from './game/remoteController.js';
+
+// If opened on a phone via the Cast-to-TV QR code (`/?controller=XXXX`),
+// launch the lightweight wireless Steering Wheel Controller instead of 3D WebGL.
+const controllerRoom = new URLSearchParams(window.location.search).get('controller');
+if (controllerRoom) {
+  launchPhoneControllerMode(controllerRoom);
+} else {
+  initMainGame();
+}
+
+function initMainGame() {
 
 const ui = {
   startOverlay: document.getElementById('start-overlay'),
@@ -34,6 +46,13 @@ const ui = {
   btnMusic: document.getElementById('btn-music'),
   btnReset: document.getElementById('btn-reset'),
   btnMenu: document.getElementById('btn-menu'),
+  btnCastMenu: document.getElementById('btn-cast-menu'),
+  btnCastHud: document.getElementById('btn-cast-hud'),
+  castMenuLabel: document.getElementById('cast-menu-label'),
+  castHudLabel: document.getElementById('cast-hud-label'),
+  castModal: document.getElementById('cast-modal'),
+  castPairDot: document.getElementById('cast-pair-dot'),
+  castPairText: document.getElementById('cast-pair-text'),
   btnMotionMenu: document.getElementById('btn-motion-menu'),
   btnMotionHud: document.getElementById('btn-motion-hud'),
   motionStatusText: document.getElementById('motion-status-text'),
@@ -255,6 +274,65 @@ ui.btnMotionMenu.addEventListener('click', () => engine.toggleMotionSteering());
 ui.btnMotionHud.addEventListener('click', () => engine.toggleMotionSteering());
 document.getElementById('btn-recenter-wheel').addEventListener('click', () => engine.recenterMotionWheel());
 
+// ---------- Cast to TV & Play with Your Phone modal ----------
+const castQrCanvas = document.getElementById('cast-qr-canvas');
+const castTvUrlEl = document.getElementById('cast-tv-url');
+const castPhoneUrlEl = document.getElementById('cast-phone-url');
+const castRoomCodeEl = document.getElementById('cast-room-code');
+const castStatusMsg = document.getElementById('cast-status-msg');
+
+async function openCastModal() {
+  if (!ui.castModal) return;
+  ui.castModal.classList.remove('hidden');
+  castRoomCodeEl.textContent = engine.tvHost.roomCode;
+  castTvUrlEl.textContent = engine.tvHost.getTVUrl();
+  const phoneUrl = await engine.tvHost.renderQRCode(castQrCanvas);
+  castPhoneUrlEl.textContent = phoneUrl;
+  engine.onRemoteConnectionChange(engine.tvHost.phoneConnected, engine.tvHost.phoneCount);
+}
+
+function closeCastModal() {
+  if (ui.castModal) ui.castModal.classList.add('hidden');
+}
+
+if (ui.btnCastMenu) ui.btnCastMenu.addEventListener('click', openCastModal);
+if (ui.btnCastHud) ui.btnCastHud.addEventListener('click', openCastModal);
+document.getElementById('btn-close-cast')?.addEventListener('click', closeCastModal);
+ui.castModal?.addEventListener('click', (e) => {
+  if (e.target === ui.castModal) closeCastModal();
+});
+
+document.getElementById('btn-launch-cast')?.addEventListener('click', async () => {
+  const res = await engine.tvHost.castToTV();
+  if (castStatusMsg) castStatusMsg.textContent = res.message;
+});
+
+function copyText(text, btn) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      const prev = btn.textContent;
+      btn.textContent = 'COPIED!';
+      setTimeout(() => (btn.textContent = prev), 1400);
+    }).catch(() => {});
+  }
+}
+
+document.getElementById('btn-copy-tv')?.addEventListener('click', (e) => {
+  copyText(engine.tvHost.getTVUrl(), e.currentTarget);
+});
+document.getElementById('btn-copy-phone')?.addEventListener('click', (e) => {
+  copyText(engine.tvHost.getControllerUrl(), e.currentTarget);
+});
+document.getElementById('btn-test-controller')?.addEventListener('click', () => {
+  window.open(`${window.location.origin}/?controller=${engine.tvHost.roomCode}`, '_blank');
+});
+
+// Sync city selector UI if the user changes the city remotely from their phone!
+engine.onCityChangedExternal = () => {
+  activeRegion = getCityById(engine.selectedCityId).region || 'india';
+  renderCitySelector();
+};
+
 // ---------- Settings overlay ----------
 const settingsOverlay = document.getElementById('settings-overlay');
 let rebinding = null; // action id waiting for a key press
@@ -423,4 +501,5 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {});
   });
+}
 }
