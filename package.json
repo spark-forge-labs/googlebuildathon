@@ -4,19 +4,36 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 5173",
+    "dev": "tsx server.ts",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0 --port 4173",
-    "dev:phone": "vite --mode phone",
-    "gen:tracks": "node scripts/gen-track-data.mjs"
+    "start": "NODE_ENV=production tsx server.ts",
+    "lint": "tsc --noEmit",
+    "test": "tsx --test src/game/raceSchedule.test.ts src/game/circuitMath.test.ts src/game/weeklyLeaderboard.test.ts src/game/mapBuildings.test.ts"
   },
   "dependencies": {
     "@dgreenheck/ez-tree": "^1.1.0",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/express": "^5.0.6",
+    "@types/google.maps": "^3.67.0",
+    "@types/react": "^19.3.3",
+    "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
+    "@vis.gl/react-google-maps": "^1.10.2",
+    "@vitejs/plugin-react": "4.3.4",
+    "express": "^5.3.0",
+    "lucide-react": "^1.80.0",
     "meshoptimizer": "^1.3.0",
     "qrcode": "^1.5.4",
-    "three": "^0.170.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
+    "three": "^0.170.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "ws": "^8.23.0"
   },
   "devDependencies": {
+    "@types/three": "^0.187.0",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "vite": "^6.0.0"
   }
