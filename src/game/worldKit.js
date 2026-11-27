@@ -133,12 +133,23 @@ export function facadeMaterial(style, tint = 0xffffff, ru = 1, rv = 1) {
   map.userData = {};
   map.repeat.set(ru, rv);
   map.needsUpdate = true;
+  const rough = f.rough.clone();
+  rough.userData = {};
+  rough.repeat.set(ru, rv);
+  rough.needsUpdate = true;
+  const bump = f.bump.clone();
+  bump.userData = {};
+  bump.repeat.set(ru, rv);
+  bump.needsUpdate = true;
   const m = new THREE.MeshStandardMaterial({
     map,
+    roughnessMap: rough,
+    bumpMap: bump,
+    bumpScale: style === 'glass' ? 0.25 : 0.38,
     color: tint,
-    roughness: style === 'glass' ? 0.15 : 0.85,
-    metalness: style === 'glass' ? 0.55 : 0.02,
-    envMapIntensity: style === 'glass' ? 1.3 : 0.6,
+    roughness: 1,
+    metalness: style === 'glass' ? 0.68 : 0.04,
+    envMapIntensity: style === 'glass' ? 1.65 : 0.72,
   });
   m.addEventListener('dispose', () => {
     m.userData.disposed = true;

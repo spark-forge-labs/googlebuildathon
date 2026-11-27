@@ -6,7 +6,10 @@ export const ROAD_WIDTH = 15.0;
 export const ROAD_HALF_WIDTH = ROAD_WIDTH * 0.5;
 export const TRACK_SAMPLES = 480;
 
+let roadMapsCache = null;
+
 function createRoadMaps() {
+  if (roadMapsCache) return roadMapsCache;
   // Realistic weathered circuit asphalt: grey aggregate, rubbered racing line,
   // worn white edge lines. One tile = full road width x ~14 units of length.
   const W = 1024;
@@ -51,21 +54,51 @@ function createRoadMaps() {
   }
   ctx.globalAlpha = 1;
 
-  // Aggregate stones
+  // Aggregate stones via direct ImageData pixel writes (~80x faster than 213k fillRect calls)
+  const colImg = ctx.getImageData(0, 0, W, H);
+  const colData = colImg.data;
+  const bumpImg = b.getImageData(0, 0, 512, 512);
+  const bumpData = bumpImg.data;
   for (let i = 0; i < 160000; i++) {
-    const x = rnd() * W;
-    const y = rnd() * H;
+    const x = (rnd() * W) | 0;
+    const y = (rnd() * H) | 0;
     const v = rnd();
-    const g = v < 0.55 ? 40 + v * 50 : 90 + v * 70;
-    ctx.fillStyle = `rgb(${g | 0},${g | 0},${(g - 2) | 0})`;
+    const g = (v < 0.55 ? 40 + v * 50 : 90 + v * 70) | 0;
+    const gb = g > 2 ? g - 2 : 0;
     const sz = rnd() < 0.08 ? 3 : rnd() < 0.5 ? 2 : 1;
-    ctx.fillRect(x, y, sz, sz);
+    const maxY = y + sz < H ? y + sz : H;
+    const maxX = x + sz < W ? x + sz : W;
+    for (let py = y; py < maxY; py++) {
+      let idx = (py * W + x) << 2;
+      for (let px = x; px < maxX; px++) {
+        colData[idx] = g;
+        colData[idx + 1] = g;
+        colData[idx + 2] = gb;
+        colData[idx + 3] = 255;
+        idx += 4;
+      }
+    }
     if (i % 3 === 0) {
-      const bv = 60 + rnd() * 150;
-      b.fillStyle = `rgb(${bv | 0},${bv | 0},${bv | 0})`;
-      b.fillRect(x * 0.5, y * 0.5, 1 + (sz > 1 ? 1 : 0), 1 + (sz > 1 ? 1 : 0));
+      const bv = (60 + rnd() * 150) | 0;
+      const bx = x >> 1;
+      const by = y >> 1;
+      const bsz = sz > 1 ? 2 : 1;
+      const maxBy = by + bsz < 512 ? by + bsz : 512;
+      const maxBx = bx + bsz < 512 ? bx + bsz : 512;
+      for (let py = by; py < maxBy; py++) {
+        let bidx = (py * 512 + bx) << 2;
+        for (let px = bx; px < maxBx; px++) {
+          bumpData[bidx] = bv;
+          bumpData[bidx + 1] = bv;
+          bumpData[bidx + 2] = bv;
+          bumpData[bidx + 3] = 255;
+          bidx += 4;
+        }
+      }
     }
   }
+  ctx.putImageData(colImg, 0, 0);
+  b.putImageData(bumpImg, 0, 0);
 
   // Hairline cracks and sealed joints
   ctx.strokeStyle = 'rgba(20,20,19,0.55)';
@@ -135,9 +168,11 @@ function createRoadMaps() {
     t.repeat.set(1, 58);
     t.anisotropy = 16;
     if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    t.userData.shared = true;
     return t;
   };
-  return { map: make(color, true), bumpMap: make(bump, false), roughnessMap: make(rough, false) };
+  roadMapsCache = { map: make(color, true), bumpMap: make(bump, false), roughnessMap: make(rough, false) };
+  return roadMapsCache;
 }
 
 function createGutterTexture() {

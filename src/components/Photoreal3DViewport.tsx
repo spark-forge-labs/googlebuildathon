@@ -29,6 +29,16 @@ import {
   paceSpeedKmhToUPerSec,
   speedKmhToWorldUnitsPerSec,
 } from '../game/speedVisuals';
+import {
+  AURA_IPD_METERS,
+  AURA_OPTICAL_FOV_DEG,
+  AuraSpatialHud3D,
+  extractXrFrameDrivingInput,
+  getAuraDimmingConfig,
+  type AuraDimmingLevel,
+  type AuraViewMode,
+  type XrDrivingInput,
+} from '../game/xrAura';
 
 export type ThreeDCameraMode = 'CHASE' | 'HOOD' | 'BUMPER' | 'TV';
 
@@ -42,6 +52,19 @@ export interface LiveThreeDTelemetry {
   isBraking: boolean;
   phase: RacePhase;
   countdownSecondsLeft: number;
+  gear?: number;
+  nitroPercent?: number;
+  rank?: number;
+  totalRacers?: number;
+  lap?: number;
+  remainingClock?: string;
+  circuitName?: string;
+  landmark?: string;
+}
+
+export interface XrSessionBridge {
+  startWebXrSession: (mode: 'immersive-ar' | 'immersive-vr') => Promise<boolean>;
+  endWebXrSession: () => Promise<void>;
 }
 
 interface Photoreal3DViewportProps {
@@ -52,6 +75,11 @@ interface Photoreal3DViewportProps {
   myParticipantId: string | null;
   cameraMode: ThreeDCameraMode;
   active: boolean;
+  auraMode?: AuraViewMode;
+  auraDimming?: AuraDimmingLevel;
+  xrInputRef?: React.MutableRefObject<XrDrivingInput>;
+  xrBridgeRef?: React.MutableRefObject<XrSessionBridge | null>;
+  onWebXrStateChange?: (activeMode: 'immersive-ar' | 'immersive-vr' | null, error?: string) => void;
 }
 
 interface PaceCarState {
@@ -192,10 +220,17 @@ export function Photoreal3DViewport({
   myParticipantId,
   cameraMode,
   active,
+  auraMode = 'standard',
+  auraDimming = 5,
+  xrInputRef,
+  xrBridgeRef,
+  onWebXrStateChange,
 }: Photoreal3DViewportProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const speedLinesRef = useRef<HTMLDivElement | null>(null);
   const [contextLost, setContextLost] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
+  const [webglError, setWebglError] = useState<string | null>(null);
 
   const propsRef = useRef({
     circuitId,
@@ -204,6 +239,10 @@ export function Photoreal3DViewport({
     myParticipantId,
     cameraMode,
     active,
+    auraMode,
+    auraDimming,
+    xrInputRef,
+    onWebXrStateChange,
   });
   propsRef.current = {
     circuitId,
@@ -212,6 +251,10 @@ export function Photoreal3DViewport({
     myParticipantId,
     cameraMode,
     active,
+    auraMode,
+    auraDimming,
+    xrInputRef,
+    onWebXrStateChange,
   };
 
   useEffect(() => {
@@ -223,10 +266,17 @@ export function Photoreal3DViewport({
     const initialH = Math.max(240, container.clientHeight || 540);
     const pixelRatio = isSoftwareGl ? 0.65 : Math.min(window.devicePixelRatio || 1, 2);
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: isSoftwareGl ? false : false, // SMAA handles AA on GPU; off on software WebGL
-      powerPreference: 'high-performance',
-    });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: false, // SMAA handles AA on GPU; WebXR uses native MSAA swapchain
+        alpha: true, // Required for optical see-through immersive-ar on XREAL Aura glasses
+        powerPreference: 'high-performance',
+      });
+    } catch {
+      setWebglError('3D WebGL context unavailable — use Offline Map view to continue racing.');
+      return;
+    }
     renderer.setPixelRatio(pixelRatio);
     renderer.setSize(initialW, initialH);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -234,6 +284,8 @@ export function Photoreal3DViewport({
     renderer.toneMappingExposure = 1.04;
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType('local');
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
@@ -251,7 +303,34 @@ export function Photoreal3DViewport({
     renderer.domElement.addEventListener('webglcontextrestored', handleContextRestored);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(62, initialW / initialH, 0.35, 2400);
+    const camera = new THREE.PerspectiveCamera(62, initialW / initialH, 0.25, 2400);
+
+    // Camera rig enables natural 6DoF head tracking inside XREAL Aura while riding with the Ferrari 458
+    const cameraRig = new THREE.Group();
+    cameraRig.name = 'AuraCameraRig';
+    cameraRig.add(camera);
+    scene.add(cameraRig);
+
+    // Curved 3D holographic telemetry HUD anchored inside Aura's 70° optical FOV
+    const spatialHud = new AuraSpatialHud3D();
+    camera.add(spatialHud.group);
+
+    // StereoCamera for direct USB-C DisplayPort-in (DP-in) 3D Side-by-Side (SBS) output on XREAL Aura
+    const stereoCam = new THREE.StereoCamera();
+    stereoCam.eyeSep = AURA_IPD_METERS;
+    stereoCam.aspect = 0.5;
+
+    // Gentle head-look parallax offset when previewing 70° Spatial Mode with mouse or device orientation
+    const headLook = { yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0 };
+    const onPointerMove = (e: PointerEvent) => {
+      const m = propsRef.current.auraMode;
+      if (m !== 'aura-spatial' && m !== 'aura-sbs') return;
+      const nx = (e.clientX / Math.max(1, window.innerWidth)) * 2 - 1;
+      const ny = (e.clientY / Math.max(1, window.innerHeight)) * 2 - 1;
+      headLook.targetYaw = THREE.MathUtils.clamp(-nx * 0.14, -0.16, 0.16);
+      headLook.targetPitch = THREE.MathUtils.clamp(-ny * 0.08, -0.1, 0.1);
+    };
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
 
     // 3-point outdoor lighting rig matching original engine.js
     const hemiLight = new THREE.HemisphereLight(0xbfd6ff, 0x5b4a36, 0.58);
@@ -323,6 +402,7 @@ export function Photoreal3DViewport({
     // Smooth camera & motion state
     const camPos = new THREE.Vector3();
     const camLook = new THREE.Vector3();
+    const smoothChaseFwd = new THREE.Vector3(0, 0, 1);
     let camInitialized = false;
     let smoothU = 0;
     let smoothLateral = 0;
@@ -476,24 +556,35 @@ export function Photoreal3DViewport({
       camInitialized = false;
     };
 
-    // Build initial city immediately so first frame is never blank
-    loadCityScene(propsRef.current.circuitId);
+    // Defer initial heavy 3D scene construction by 1 frame so clicking Solo Practice
+    // paints the RaceCockpit HUD + Offline 3D Satellite Map immediately (< 30ms) with zero UI freeze!
+    const initFrameId = requestAnimationFrame(() => {
+      if (disposed) return;
+      try {
+        loadCityScene(propsRef.current.circuitId);
+        setSceneReady(true);
+        startFlatLoop();
+      } catch {
+        setWebglError('3D viewport failed to initialize — switch to Offline Map view.');
+        return;
+      }
 
-    // Preload real Ferrari 458 Italia GLB + EZ-Tree foliage and seamlessly upgrade scene
-    preloadCarModel().then(() => {
-      if (disposed || !currentCity) return;
-      if (isCarModelReady() && !carsBuiltWithRealModel) {
-        rebuildPlayerAndPaceCars(currentCity, propsRef.current.vehicleAccentColor);
+      // Preload real Ferrari 458 Italia GLB + EZ-Tree foliage and seamlessly upgrade scene
+      preloadCarModel().then(() => {
+        if (disposed || !currentCity) return;
+        if (isCarModelReady() && !carsBuiltWithRealModel) {
+          rebuildPlayerAndPaceCars(currentCity, propsRef.current.vehicleAccentColor);
+        }
+      });
+
+      if (!isSoftwareGl) {
+        loadTreeLibrary().then((mod) => {
+          if (disposed || !mod || !currentCity) return;
+          ensureTreeVariants(renderer);
+          loadCityScene(propsRef.current.circuitId);
+        });
       }
     });
-
-    if (!isSoftwareGl) {
-      loadTreeLibrary().then((mod) => {
-        if (disposed || !mod || !currentCity) return;
-        ensureTreeVariants(renderer);
-        loadCityScene(propsRef.current.circuitId);
-      });
-    }
 
     // ResizeObserver keeps aspect ratio & composer crisp across Split View / Full View toggles
     let lastSizedW = initialW;
@@ -505,7 +596,7 @@ export function Photoreal3DViewport({
       if (w === lastSizedW && h === lastSizedH) return;
       lastSizedW = w;
       lastSizedH = h;
-      const effectivePr = isSoftwareGl ? 0.65 : pixelRatio;
+      const effectivePr = isSoftwareGl ? (w > 1000 ? 0.5 : 0.65) : pixelRatio;
       renderer.setPixelRatio(effectivePr);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -533,10 +624,13 @@ export function Photoreal3DViewport({
     const resizeObs = new ResizeObserver(() => applySize());
     resizeObs.observe(container);
 
-    // Render loop with mandatory software-WebGL pacing (afterDraw fenceSync)
+    // Render loop with mandatory software-WebGL pacing (afterDraw fenceSync) + Native WebXR loop support
     let frameId = 0;
     let lastTs = performance.now();
     const headingOut = { value: 0 };
+    let activeXrSession: XRSession | null = null;
+    let activeXrMode: 'immersive-ar' | 'immersive-vr' | null = null;
+    const _rigEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
     const afterDraw = (cb: () => void) => {
       const gl = renderer.getContext() as WebGL2RenderingContext;
@@ -562,7 +656,7 @@ export function Photoreal3DViewport({
       }
     };
 
-    const tick = () => {
+    const renderFrame = (xrFrame?: XRFrame) => {
       if (disposed) return;
 
       const now = performance.now();
@@ -570,10 +664,13 @@ export function Photoreal3DViewport({
       lastTs = now;
 
       const props = propsRef.current;
+      const isWebXrPresenting = renderer.xr.isPresenting;
 
-      // Skip heavy drawing when viewport is hidden (e.g., Map-only view or Live Street View active)
-      if (!props.active) {
-        frameId = window.setTimeout(tick, 180);
+      // Skip heavy drawing when viewport is hidden (unless presenting natively in XR glasses)
+      if (!props.active && !isWebXrPresenting) {
+        if (!isWebXrPresenting) {
+          frameId = window.setTimeout(() => renderFrame(), 180);
+        }
         return;
       }
 
@@ -584,8 +681,22 @@ export function Photoreal3DViewport({
       }
 
       if (!track || !deskWorld || !currentCity || !playerRig) {
-        frameId = requestAnimationFrame(tick);
+        if (!isWebXrPresenting) {
+          frameId = requestAnimationFrame(() => renderFrame());
+        }
         return;
+      }
+
+      // Extract live 6DoF hand-tracking / puck controls during active WebXR session
+      if (isWebXrPresenting && activeXrSession && xrFrame && props.xrInputRef) {
+        const refSpace = renderer.xr.getReferenceSpace();
+        if (refSpace) {
+          props.xrInputRef.current = extractXrFrameDrivingInput(
+            activeXrSession,
+            xrFrame,
+            refSpace
+          );
+        }
       }
 
       elapsed += dt;
@@ -810,10 +921,22 @@ export function Photoreal3DViewport({
       if (mode === 'CHASE') {
         const dist = feel.chaseDistance;
         const height = feel.chaseHeight;
+        if (!camInitialized) {
+          smoothChaseFwd.set(fwdX, 0, fwdZ).normalize();
+        } else {
+          const alphaYaw = 1 - Math.exp(-10 * dt);
+          smoothChaseFwd.x += (fwdX - smoothChaseFwd.x) * alphaYaw;
+          smoothChaseFwd.z += (fwdZ - smoothChaseFwd.z) * alphaYaw;
+          if (smoothChaseFwd.lengthSq() > 0.0001) {
+            smoothChaseFwd.normalize();
+          } else {
+            smoothChaseFwd.set(fwdX, 0, fwdZ).normalize();
+          }
+        }
         _desiredCamPos.set(
-          playerPos.x - fwdX * dist + rightX * shakeX,
+          playerPos.x - smoothChaseFwd.x * dist + rightX * shakeX,
           playerPos.y + height + shakeY,
-          playerPos.z - fwdZ * dist + rightZ * shakeX
+          playerPos.z - smoothChaseFwd.z * dist + rightZ * shakeX
         );
         _desiredCamLook.set(
           playerPos.x + fwdX * 18 + rightX * lookPan,
@@ -856,50 +979,253 @@ export function Photoreal3DViewport({
         _desiredCamLook.set(playerPos.x, playerPos.y + 1.3, playerPos.z);
       }
 
-      if (!camInitialized || mode === 'HOOD' || mode === 'BUMPER') {
+      if (!camInitialized || mode === 'CHASE' || mode === 'HOOD' || mode === 'BUMPER') {
         camPos.copy(_desiredCamPos);
         camLook.copy(_desiredCamLook);
         camInitialized = true;
       } else {
-        // Tighter high-speed tracking so camera keeps crisp pace at 200-320 km/h without rubber-banding
-        const alphaPos = 1 - Math.exp(-(mode === 'TV' ? 8 : 16) * dt);
+        const alphaPos = 1 - Math.exp(-8 * dt);
         const alphaLook = 1 - Math.exp(-18 * dt);
         camPos.lerp(_desiredCamPos, alphaPos);
         camLook.lerp(_desiredCamLook, alphaLook);
       }
 
-      camera.position.copy(camPos);
-      camera.lookAt(camLook);
-      camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 7, dt);
-      camera.updateProjectionMatrix();
+      // Apply XREAL Aura 5-Level Electrochromic Dimming (optical see-through AR vs dimmed full-immersion sky)
+      const isAuraActive = props.auraMode !== 'standard' || isWebXrPresenting;
+      const dimmingCfg = getAuraDimmingConfig(props.auraDimming);
+      if (skyObj) {
+        if (isWebXrPresenting && activeXrMode === 'immersive-ar' && dimmingCfg.transparentPassthrough) {
+          skyObj.visible = false;
+          renderer.setClearColor(0x000000, 0);
+        } else if (isAuraActive && dimmingCfg.skyOpacity < 0.99) {
+          skyObj.visible = dimmingCfg.skyOpacity > 0.05;
+          renderer.setClearColor(0x060911, isWebXrPresenting && activeXrMode === 'immersive-ar' ? 0 : 1);
+          const skyMesh = skyObj as THREE.Mesh;
+          if (skyMesh.material && !Array.isArray(skyMesh.material)) {
+            skyMesh.material.transparent = true;
+            skyMesh.material.opacity = dimmingCfg.skyOpacity;
+          }
+        } else {
+          skyObj.visible = true;
+          renderer.setClearColor(0x090b10, 1);
+          const skyMesh = skyObj as THREE.Mesh;
+          if (skyMesh.material && !Array.isArray(skyMesh.material)) {
+            skyMesh.material.transparent = false;
+            skyMesh.material.opacity = 1;
+          }
+        }
+      }
 
-      if (composer) {
+      // Position cameraRig (in WebXR, user's 6DoF head rotates freely relative to the car!)
+      if (isWebXrPresenting) {
+        // Place XR rider comfortably in Ferrari cockpit / hood vantage for natural 6DoF stereo depth
+        const xrFwd = mode === 'HOOD' || mode === 'BUMPER' ? 0.55 : -4.4;
+        const xrUp = mode === 'HOOD' || mode === 'BUMPER' ? 1.18 : 2.15;
+        cameraRig.position.set(
+          playerPos.x + fwdX * xrFwd,
+          playerPos.y + xrUp,
+          playerPos.z + fwdZ * xrFwd
+        );
+        // Three.js camera looks down -Z, while car forward is +headingOut -> orient rig +Math.PI
+        _rigEuler.set(0, headingOut.value + Math.PI, 0, 'YXZ');
+        cameraRig.quaternion.setFromEuler(_rigEuler);
+      } else {
+        cameraRig.position.set(0, 0, 0);
+        cameraRig.quaternion.identity();
+        camera.position.copy(camPos);
+        camera.lookAt(camLook);
+
+        if (props.auraMode === 'aura-spatial' || props.auraMode === 'aura-sbs') {
+          headLook.yaw = THREE.MathUtils.damp(headLook.yaw, headLook.targetYaw, 6, dt);
+          headLook.pitch = THREE.MathUtils.damp(headLook.pitch, headLook.targetPitch, 6, dt);
+          camera.rotateY(headLook.yaw);
+          camera.rotateX(headLook.pitch);
+        }
+
+        const effectiveFov =
+          props.auraMode === 'aura-spatial' || props.auraMode === 'aura-sbs'
+            ? Math.max(AURA_OPTICAL_FOV_DEG, targetFov + 4)
+            : targetFov;
+        camera.fov = THREE.MathUtils.damp(camera.fov, effectiveFov, 7, dt);
+        camera.updateProjectionMatrix();
+      }
+
+      // Update floating curved 3D holographic telemetry visor in all XR Aura modes
+      spatialHud.setVisible(isAuraActive);
+      if (isAuraActive) {
+        const xrIn = props.xrInputRef?.current;
+        spatialHud.update(
+          {
+            speedKmh: tel.speedKmh,
+            gear: tel.gear ?? 1,
+            nitroPercent: tel.nitroPercent ?? 0,
+            isNitroActive: tel.isNitroActive,
+            rank: tel.rank ?? 1,
+            totalRacers: tel.totalRacers ?? 1,
+            lap: tel.lap ?? 1,
+            remainingClock: tel.remainingClock ?? '05:00',
+            circuitName: tel.circuitName ?? currentCity.name,
+            landmark: tel.landmark ?? currentCity.name,
+            steeringOffset: tel.steeringOffset,
+            dimmingLevel: props.auraDimming,
+            inputSource: xrIn?.source ?? 'none',
+            handsTracked: xrIn?.handsTracked ?? 0,
+            modeLabel: isWebXrPresenting
+              ? activeXrMode === 'immersive-ar'
+                ? 'AURA AR'
+                : 'AURA VR'
+              : props.auraMode === 'aura-sbs'
+                ? 'DP-IN 3D SBS'
+                : 'AURA 70°',
+            isCountdown: tel.phase === 'countdown',
+            countdownSec: tel.countdownSecondsLeft,
+          },
+          now
+        );
+      }
+
+      // Render pipeline: Native WebXR stereo | DP-in 3D Side-by-Side Stereo | Standard GPU/Software
+      if (isWebXrPresenting) {
+        renderer.render(scene, camera);
+      } else if (props.auraMode === 'aura-sbs') {
+        const w = lastSizedW;
+        const h = lastSizedH;
+        camera.updateMatrixWorld();
+        stereoCam.aspect = (w * 0.5) / Math.max(1, h);
+        stereoCam.update(camera);
+
+        renderer.setScissorTest(true);
+        // Left Sony Micro-OLED eye
+        renderer.setScissor(0, 0, Math.floor(w / 2), h);
+        renderer.setViewport(0, 0, Math.floor(w / 2), h);
+        renderer.render(scene, stereoCam.cameraL);
+        // Right Sony Micro-OLED eye
+        renderer.setScissor(Math.floor(w / 2), 0, Math.ceil(w / 2), h);
+        renderer.setViewport(Math.floor(w / 2), 0, Math.ceil(w / 2), h);
+        renderer.render(scene, stereoCam.cameraR);
+
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, w, h);
+      } else if (composer) {
         composer.render();
       } else {
         renderer.render(scene, camera);
       }
 
-      if (isSoftwareGl) {
-        afterDraw(tick);
-      } else {
-        frameId = requestAnimationFrame(tick);
+      if (!isWebXrPresenting) {
+        if (isSoftwareGl) {
+          afterDraw(() => renderFrame());
+        } else {
+          frameId = requestAnimationFrame(() => renderFrame());
+        }
       }
     };
 
-    if (isSoftwareGl) {
-      frameId = window.setTimeout(tick, 30);
-    } else {
-      frameId = requestAnimationFrame(tick);
+    const startFlatLoop = () => {
+      cancelAnimationFrame(frameId);
+      clearTimeout(frameId);
+      if (isSoftwareGl) {
+        frameId = window.setTimeout(() => renderFrame(), 30);
+      } else {
+        frameId = requestAnimationFrame(() => renderFrame());
+      }
+    };
+
+    // Expose WebXR session launcher directly tied to this WebGLRenderer (must be called inside user click gesture)
+    const startWebXrSession = async (
+      mode: 'immersive-ar' | 'immersive-vr'
+    ): Promise<boolean> => {
+      const navXr = (navigator as Navigator & { xr?: XRSystem }).xr;
+      if (!navXr) {
+        propsRef.current.onWebXrStateChange?.(
+          null,
+          'WebXR not available in this browser — using Aura 70° Spatial / DP-in Stereo mode.'
+        );
+        return false;
+      }
+      try {
+        if (activeXrSession) {
+          await activeXrSession.end().catch(() => {});
+        }
+        const optionalFeatures = ['local-floor', 'bounded-floor', 'hand-tracking'];
+        const overlayRoot = document.getElementById('aura-xr-dom-overlay');
+        const sessionInit: XRSessionInit = {
+          optionalFeatures: overlayRoot
+            ? [...optionalFeatures, 'dom-overlay']
+            : optionalFeatures,
+          ...(overlayRoot ? { domOverlay: { root: overlayRoot } } : {}),
+        };
+        const session = await navXr.requestSession(mode, sessionInit);
+        activeXrSession = session;
+        activeXrMode = mode;
+
+        cancelAnimationFrame(frameId);
+        clearTimeout(frameId);
+
+        const onSessionEnd = () => {
+          session.removeEventListener('end', onSessionEnd);
+          activeXrSession = null;
+          activeXrMode = null;
+          renderer.setAnimationLoop(null);
+          if (propsRef.current.xrInputRef) {
+            propsRef.current.xrInputRef.current = {
+              active: false,
+              source: 'none',
+              steer: 0,
+              throttle: 0,
+              brake: 0,
+              nitro: false,
+              dualPinchHold: false,
+              handsTracked: 0,
+            };
+          }
+          propsRef.current.onWebXrStateChange?.(null);
+          if (!disposed) {
+            startFlatLoop();
+          }
+        };
+        session.addEventListener('end', onSessionEnd);
+
+        await renderer.xr.setSession(session);
+        renderer.setAnimationLoop((_time, xrFrame) => {
+          renderFrame(xrFrame);
+        });
+        propsRef.current.onWebXrStateChange?.(mode);
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unable to start WebXR session';
+        propsRef.current.onWebXrStateChange?.(null, msg);
+        return false;
+      }
+    };
+
+    const endWebXrSession = async () => {
+      if (activeXrSession) {
+        await activeXrSession.end().catch(() => {});
+      }
+    };
+
+    if (xrBridgeRef) {
+      xrBridgeRef.current = { startWebXrSession, endWebXrSession };
     }
 
     return () => {
       disposed = true;
+      cancelAnimationFrame(initFrameId);
+      if (xrBridgeRef) xrBridgeRef.current = null;
+      if (activeXrSession) {
+        activeXrSession.end().catch(() => {});
+        activeXrSession = null;
+      }
+      renderer.setAnimationLoop(null);
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      window.removeEventListener('pointermove', onPointerMove);
       resizeObs.disconnect();
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored);
 
+      spatialHud.dispose();
       if (deskWorld) deskWorld.dispose();
       if (track) {
         scene.remove(track.group);
@@ -910,7 +1236,7 @@ export function Photoreal3DViewport({
       renderer.dispose();
       if (container) container.innerHTML = '';
     };
-  }, [telemetryRef]);
+  }, [telemetryRef, xrBridgeRef]);
 
   return (
     <div className="relative w-full h-full bg-[#090b10] overflow-hidden">
@@ -925,6 +1251,16 @@ export function Photoreal3DViewport({
         aria-hidden="true"
         className="speed-lines-overlay pointer-events-none absolute inset-0 z-10 opacity-0 transition-opacity duration-75"
       />
+      {!sceneReady && !webglError && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#090b10] text-slate-300 text-xs font-medium pointer-events-none">
+          Building 3D Street Circuit…
+        </div>
+      )}
+      {webglError && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#090b10]/95 p-6 text-center text-slate-200 text-xs font-medium">
+          {webglError}
+        </div>
+      )}
       {contextLost && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#090b10]/90 text-slate-200 text-xs font-medium">
           Restoring 3D WebGL renderer…

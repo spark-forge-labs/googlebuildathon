@@ -1,17 +1,17 @@
 {
-  "name": "India GP: City Street Racing",
-  "short_name": "India GP",
-  "description": "Photoreal street racing through 26 iconic city circuits. Tilt your phone to drive.",
-  "start_url": "./?source=pwa",
-  "scope": "./",
+  "name": "StreetView GP — XR Aura Edition",
+  "short_name": "StreetView GP",
+  "description": "Real-world multiplayer street racing across 27 iconic cities with world-class 3D city architecture, bundled Offline 3D Satellite Maps, V8 soundtracks, and native XREAL Aura / Android XR spatial support.",
+  "start_url": "/?source=xr",
+  "scope": "/",
   "display": "fullscreen",
   "orientation": "landscape",
-  "background_color": "#0a0e1a",
-  "theme_color": "#0a0e1a",
+  "background_color": "#090b10",
+  "theme_color": "#090b10",
   "categories": ["games", "sports"],
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

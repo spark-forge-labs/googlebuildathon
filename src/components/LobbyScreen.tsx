@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Check,
   Clock,
   Copy,
+  Eye,
   Flag,
+  Glasses,
   Globe,
   Hand,
   History,
@@ -13,6 +15,7 @@ import {
   Music,
   Play,
   Share2,
+  Sun,
   Trophy,
   Users,
   Volume2,
@@ -30,6 +33,11 @@ import {
 import { buildCircuitMetrics } from '../game/circuitMath';
 import { MIN_PARTICIPANTS_FOR_RACE, formatClockMs } from '../game/raceSchedule';
 import { getCircuitImage } from '../data/circuitImages';
+import {
+  detectXrAuraCapabilities,
+  type AuraViewMode,
+  type XrAuraCapabilities,
+} from '../game/xrAura';
 import type { AnnouncedRaceResult, RoomStatePayload } from '../types/race';
 import { GlobalLeaderboardOverlay } from './GlobalLeaderboardOverlay';
 
@@ -52,7 +60,7 @@ interface LobbyScreenProps {
   onCreatePrivateRoom: () => void;
   onLaunchPrivateRace: () => void;
   onToggleReady: (ready: boolean) => void;
-  onStartSoloPractice: () => void;
+  onStartSoloPractice: (auraStartMode?: AuraViewMode) => void;
   isJoinedToRoom: boolean;
   activeRoomUrl: string;
   recentHistory: AnnouncedRaceResult[];
@@ -60,6 +68,8 @@ interface LobbyScreenProps {
   onToggleMute: () => void;
   musicMuted: boolean;
   onToggleMusic: () => void;
+  preferredAuraMode: AuraViewMode;
+  onPreferredAuraModeChange: (mode: AuraViewMode) => void;
 }
 
 type RegionFilter = 'all' | 'india' | 'world';
@@ -91,12 +101,31 @@ export function LobbyScreen({
   onToggleMute,
   musicMuted,
   onToggleMusic,
+  preferredAuraMode,
+  onPreferredAuraModeChange,
 }: LobbyScreenProps) {
   const [nameError, setNameError] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showWeeklyLeaderboard, setShowWeeklyLeaderboard] = useState(false);
+  const [showAuraModal, setShowAuraModal] = useState(false);
   const [regionFilter, setRegionFilter] = useState<RegionFilter>('all');
+  const [xrCaps, setXrCaps] = useState<XrAuraCapabilities>({
+    webXrAvailable: false,
+    supportsImmersiveAr: false,
+    supportsImmersiveVr: false,
+    recommendedMode: 'aura-spatial',
+  });
+
+  useEffect(() => {
+    let active = true;
+    detectXrAuraCapabilities().then((caps) => {
+      if (active) setXrCaps(caps);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const indiaCount = useMemo(() => CIRCUITS.filter((c) => c.region === 'india').length, []);
   const worldCount = useMemo(() => CIRCUITS.filter((c) => c.region === 'world').length, []);
@@ -127,6 +156,11 @@ export function LobbyScreen({
   const validateName = (): boolean => {
     if (!playerName.trim()) {
       setNameError('Enter your racer name before joining the grid.');
+      const input = document.getElementById('racer-name-input');
+      if (input) {
+        input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        input.focus();
+      }
       return false;
     }
     setNameError(null);
@@ -144,18 +178,41 @@ export function LobbyScreen({
   };
 
   const handleSolo = () => {
-    if (!validateName()) return;
+    setNameError(null);
     onStartSoloPractice();
   };
 
   const handleCopyInvite = async () => {
+    let copied = false;
     try {
-      await navigator.clipboard.writeText(activeRoomUrl);
-      setCopiedLink(true);
-      window.setTimeout(() => setCopiedLink(false), 2000);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(activeRoomUrl);
+        copied = true;
+      }
     } catch {
-      // Fallback ignored
+      copied = false;
     }
+
+    if (!copied) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = activeRoomUrl;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        ta.style.pointerEvents = 'none';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        copied = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        copied = false;
+      }
+    }
+
+    setCopiedLink(true);
+    window.setTimeout(() => setCopiedLink(false), 2200);
   };
 
   return (
@@ -191,6 +248,19 @@ export function LobbyScreen({
               />
               <span>{connected ? 'Live Race Server Synced' : 'Connecting…'}</span>
             </div>
+            <button
+              type="button"
+              data-testid="open-xr-aura-modal-btn"
+              onClick={() => setShowAuraModal(true)}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 min-h-[38px] text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+                preferredAuraMode !== 'standard'
+                  ? 'text-sky-100 bg-sky-500/25 border-sky-400/55 hover:bg-sky-500/35'
+                  : 'text-sky-200 bg-sky-500/12 border-sky-400/35 hover:bg-sky-500/22'
+              }`}
+            >
+              <Glasses className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span>XR Aura</span>
+            </button>
             <button
               type="button"
               onClick={onToggleMute}
@@ -257,7 +327,7 @@ export function LobbyScreen({
               Real Streets. Global 10-Minute Grand Prix.
             </h1>
             <p className="text-sm sm:text-base text-slate-300 mt-3 max-w-xl leading-relaxed">
-              Race live across {CIRCUITS.length} real-world street circuits in India &amp; around the globe with 3D landmarks, Google Maps 3D Hybrid, live Street View, V8 engine audio, and bespoke city soundtracks.
+              Race live across {CIRCUITS.length} real-world street circuits in India &amp; around the globe with world-class 3D city architecture, bundled Offline 3D Satellite Maps, V8 engine audio, and bespoke city soundtracks.
             </p>
           </div>
 
@@ -374,7 +444,7 @@ export function LobbyScreen({
                   02. Real-World Street Circuit ({CIRCUITS.length} Cities)
                 </h2>
                 <span className="text-xs text-slate-400">
-                  3D Landmarks · City Soundtracks · Google Maps 3D + Street View
+                  World-Class 3D Architecture · Offline 3D Satellite Maps · City Soundtracks
                 </span>
               </div>
 
@@ -604,6 +674,7 @@ export function LobbyScreen({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <button
                   type="button"
+                  data-testid="create-synced-room-btn"
                   onClick={handleCreatePrivate}
                   className="min-h-[44px] px-3.5 py-2.5 bg-[#181f2e] hover:bg-[#1f283b] border border-white/12 text-xs font-semibold text-white rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                 >
@@ -612,10 +683,11 @@ export function LobbyScreen({
                 </button>
                 <button
                   type="button"
+                  data-testid="solo-practice-btn"
                   onClick={handleSolo}
                   className="min-h-[44px] px-3.5 py-2.5 bg-[#131823] hover:bg-[#1b2232] border border-white/10 text-xs font-medium text-slate-200 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  <Play className="w-3.5 h-3.5 text-slate-400" />
+                  <Play className="w-3.5 h-3.5 text-amber-400" />
                   <span>Solo Practice Drive</span>
                 </button>
               </div>
@@ -627,6 +699,7 @@ export function LobbyScreen({
                 <span>Invite drivers from any location</span>
                 <button
                   type="button"
+                  data-testid="copy-invite-link-btn"
                   onClick={handleCopyInvite}
                   className="inline-flex items-center gap-1 text-amber-400 hover:text-amber-300 font-medium cursor-pointer"
                 >
@@ -634,9 +707,14 @@ export function LobbyScreen({
                   <span>{copiedLink ? 'Copied' : 'Copy Invite Link'}</span>
                 </button>
               </div>
-              <div className="px-3 py-2 rounded-lg bg-[#090b10] border border-white/8 text-[11px] font-mono-tabular text-slate-400 truncate">
+              <button
+                type="button"
+                onClick={handleCopyInvite}
+                title="Click to copy invite URL"
+                className="w-full text-left px-3 py-2 rounded-lg bg-[#090b10] hover:bg-[#0e131d] border border-white/8 hover:border-amber-400/35 text-[11px] font-mono-tabular text-slate-300 truncate transition-colors cursor-pointer"
+              >
                 {activeRoomUrl}
-              </div>
+              </button>
             </div>
 
             {/* Live Connected Multi-Location Participants */}
@@ -785,6 +863,131 @@ export function LobbyScreen({
         onClose={() => setShowWeeklyLeaderboard(false)}
         currentPlayerName={playerName}
       />
+
+      {/* XREAL Aura / Android XR Spatial Edition Modal */}
+      {showAuraModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="xr-aura-modal-title"
+        >
+          <div className="w-full max-w-xl bg-[#111621] border border-sky-400/30 rounded-2xl overflow-hidden shadow-2xl">
+            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-lg bg-sky-500/15 border border-sky-400/35 flex items-center justify-center">
+                  <Glasses className="w-5 h-5 text-sky-400" />
+                </div>
+                <div>
+                  <h2 id="xr-aura-modal-title" className="font-display text-lg font-bold text-white">
+                    XREAL Aura · Android XR Spatial Edition
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Dual Sony Micro-OLED 70° FOV · 6DoF Tracking · 5-Level Electrochromic Dimming
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAuraModal(false)}
+                aria-label="Close XR Aura setup"
+                className="w-9 h-9 rounded-lg hover:bg-white/10 flex items-center justify-center text-slate-300 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Detected Device & WebXR Status */}
+              <div className="p-3.5 rounded-xl bg-[#0b0f17] border border-white/10 flex items-center justify-between gap-3 text-xs">
+                <div>
+                  <div className="font-semibold text-white">
+                    {xrCaps.supportsImmersiveAr
+                      ? 'Android XR / WebXR Optical AR Ready'
+                      : xrCaps.supportsImmersiveVr
+                        ? 'WebXR Immersive Stereo Ready'
+                        : 'Desktop / USB-C DP-in Glasses Mode Ready'}
+                  </div>
+                  <div className="text-slate-400 mt-0.5">
+                    {xrCaps.supportsImmersiveAr
+                      ? 'Launch straight into transparent optical see-through AR with 6DoF head & hand tracking.'
+                      : 'Open directly on XREAL Aura Chrome for native WebXR AR, or plug into PC/Mac via USB-C DP-in for 3D SBS Stereo.'}
+                  </div>
+                </div>
+                <span className="px-2 py-1 rounded bg-sky-500/15 border border-sky-400/35 font-mono-tabular text-[11px] font-semibold text-sky-300 shrink-0">
+                  {xrCaps.supportsImmersiveAr ? 'WebXR AR' : xrCaps.supportsImmersiveVr ? 'WebXR VR' : 'DP-in / 70°'}
+                </span>
+              </div>
+
+              {/* Aura Hardware Feature Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                <div className="p-3 rounded-xl bg-[#0b0f17] border border-white/8">
+                  <div className="flex items-center gap-1.5 font-semibold text-white mb-1">
+                    <Hand className="w-3.5 h-3.5 text-amber-400" />
+                    <span>6DoF Hand Wheel</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Raise both hands to steer virtually; air-pinch right for Nitro, left to brake, or use the Aura Puck touchpad.
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-[#0b0f17] border border-white/8">
+                  <div className="flex items-center gap-1.5 font-semibold text-white mb-1">
+                    <Sun className="w-3.5 h-3.5 text-amber-400" />
+                    <span>5-Step Dimmer</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Switch L1 Optical See-Through AR to L5 Full Dimmed Grand Prix Cockpit live during any race.
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-[#0b0f17] border border-white/8">
+                  <div className="flex items-center gap-1.5 font-semibold text-white mb-1">
+                    <Eye className="w-3.5 h-3.5 text-sky-400" />
+                    <span>DP-in 3D Stereo</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Direct Side-by-Side (SBS) dual-eye stereo mode for wired USB-C DisplayPort-in glasses output.
+                  </p>
+                </div>
+              </div>
+
+              {/* Launch Actions */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  data-testid="launch-aura-spatial-btn"
+                  onClick={() => {
+                    setNameError(null);
+                    onPreferredAuraModeChange('aura-spatial');
+                    setShowAuraModal(false);
+                    onStartSoloPractice('aura-spatial');
+                  }}
+                  className="min-h-[44px] px-4 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-display font-bold text-xs tracking-wide rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Glasses className="w-4 h-4" />
+                  <span>Launch 70° Spatial Cockpit</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="launch-aura-sbs-btn"
+                  onClick={() => {
+                    setNameError(null);
+                    onPreferredAuraModeChange('aura-sbs');
+                    setShowAuraModal(false);
+                    onStartSoloPractice('aura-sbs');
+                  }}
+                  className="min-h-[44px] px-4 py-2.5 bg-[#181f2e] hover:bg-[#1f283b] border border-sky-400/35 text-sky-100 font-display font-bold text-xs tracking-wide rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Eye className="w-4 h-4 text-sky-400" />
+                  <span>Launch DP-in 3D Stereo SBS</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 text-center">
+                Inside any race, press <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">X</kbd> anytime to enter or exit XREAL Aura Mode.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

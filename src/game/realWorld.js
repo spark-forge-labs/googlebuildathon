@@ -173,11 +173,32 @@ function groundTexture(kind) {
     g.ellipse(r() * 1024, r() * 1024, s, s * (0.4 + r()), r() * 3, 0, Math.PI * 2);
     g.fill();
   }
+  const gImg = g.getImageData(0, 0, 1024, 1024);
+  const gData = gImg.data;
   for (let i = 0; i < 70000; i++) {
-    g.globalAlpha = 0.18 + r() * 0.25;
-    g.fillStyle = r() > 0.5 ? 'rgba(20,30,10,1)' : 'rgba(220,210,170,1)';
-    g.fillRect(r() * 1024, r() * 1024, 1 + r() * 1.5, 1 + r() * 2.5);
+    const a = 0.18 + r() * 0.25;
+    const inv = 1 - a;
+    const dark = r() > 0.5;
+    const tr = dark ? 20 : 220;
+    const tg = dark ? 30 : 210;
+    const tb = dark ? 10 : 170;
+    const x = (r() * 1024) | 0;
+    const y = (r() * 1024) | 0;
+    const w = 1 + ((r() * 1.5) | 0);
+    const h = 1 + ((r() * 2.5) | 0);
+    const maxY = y + h < 1024 ? y + h : 1024;
+    const maxX = x + w < 1024 ? x + w : 1024;
+    for (let py = y; py < maxY; py++) {
+      let idx = (py * 1024 + x) << 2;
+      for (let px = x; px < maxX; px++) {
+        gData[idx] = (gData[idx] * inv + tr * a) | 0;
+        gData[idx + 1] = (gData[idx + 1] * inv + tg * a) | 0;
+        gData[idx + 2] = (gData[idx + 2] * inv + tb * a) | 0;
+        idx += 4;
+      }
+    }
   }
+  g.putImageData(gImg, 0, 0);
   g.globalAlpha = 1;
   const tex = keep(new THREE.CanvasTexture(c));
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -194,8 +215,8 @@ function groundTexture(kind) {
  */
 let facadeCache = null;
 function buildFacades() {
-  const W = 256;
-  const H = 256;
+  const W = 512;
+  const H = 512;
   const bays = 4;
   const floors = 4;
   const bw = W / bays;
@@ -211,217 +232,463 @@ function buildFacades() {
     rc.width = W;
     rc.height = H;
     const rg = rc.getContext('2d');
-    const r = rand(style.length * 131 + 7);
+    const bc = document.createElement('canvas');
+    bc.width = W;
+    bc.height = H;
+    const bg = bc.getContext('2d');
+    const r = rand(style.length * 131 + 17);
+
+    // Neutral mid-height bump base
+    bg.fillStyle = 'rgb(140,140,140)';
+    bg.fillRect(0, 0, W, H);
 
     if (style === 'glass') {
-      // Curtain wall: reflective tinted glass, thin aluminium mullions, spandrel bands
+      // World-class architectural curtain wall: sky-reflected low-E glass, recessed office depth,
+      // Venetian blinds, anodized aluminum mullions, and brushed structural spandrels
       const sky = g.createLinearGradient(0, 0, 0, H);
-      sky.addColorStop(0, '#6f8ea3');
-      sky.addColorStop(1, '#3e5566');
+      sky.addColorStop(0, '#7ea8c4');
+      sky.addColorStop(0.45, '#4b708b');
+      sky.addColorStop(1, '#2a4357');
       g.fillStyle = sky;
       g.fillRect(0, 0, W, H);
-      rg.fillStyle = 'rgb(18,18,18)';
+
+      rg.fillStyle = 'rgb(16,16,16)';
       rg.fillRect(0, 0, W, H);
+      bg.fillStyle = 'rgb(85,85,85)';
+      bg.fillRect(0, 0, W, H);
+
+      // Subtle diagonal atmospheric Fresnel cloud sheen across glass facade
+      const sheen = g.createLinearGradient(0, 0, W, H);
+      sheen.addColorStop(0, 'rgba(220,242,255,0.16)');
+      sheen.addColorStop(0.35, 'rgba(255,255,255,0.03)');
+      sheen.addColorStop(0.55, 'rgba(205,235,255,0.22)');
+      sheen.addColorStop(0.75, 'rgba(18,32,48,0.1)');
+      sheen.addColorStop(1, 'rgba(195,228,248,0.14)');
+      g.fillStyle = sheen;
+      g.fillRect(0, 0, W, H);
+
+      const paneCols = bays * 2;
+      const pw = W / paneCols;
       for (let f = 0; f < floors; f++) {
-        for (let b = 0; b < bays * 2; b++) {
-          const v = r() * 18 - 9;
-          g.fillStyle = `rgba(${120 + v},${150 + v},${170 + v},${0.12 + r() * 0.12})`;
-          g.fillRect(b * (bw / 2), f * fh, bw / 2, fh);
+        const fy = f * fh;
+        const glassH = fh - 22;
+
+        for (let b = 0; b < paneCols; b++) {
+          const px = b * pw;
+          const roomType = r();
+
+          // Deep interior office room tint behind glass
+          if (roomType > 0.72) {
+            // Warm sunlit / illuminated executive office interior
+            const wg = g.createLinearGradient(0, fy + 4, 0, fy + glassH);
+            wg.addColorStop(0, 'rgba(254,232,175,0.48)');
+            wg.addColorStop(0.5, 'rgba(218,195,152,0.34)');
+            wg.addColorStop(1, 'rgba(72,68,62,0.38)');
+            g.fillStyle = wg;
+            g.fillRect(px + 3, fy + 3, pw - 6, glassH - 4);
+          } else if (roomType > 0.45) {
+            // Cool daylight open-plan office with subtle interior ceiling strip
+            const cg = g.createLinearGradient(0, fy + 4, 0, fy + glassH);
+            cg.addColorStop(0, 'rgba(198,228,248,0.34)');
+            cg.addColorStop(0.6, 'rgba(65,98,124,0.26)');
+            cg.addColorStop(1, 'rgba(24,42,58,0.45)');
+            g.fillStyle = cg;
+            g.fillRect(px + 3, fy + 3, pw - 6, glassH - 4);
+          } else {
+            // Deep mirrored architectural slate glass
+            const dg = g.createLinearGradient(0, fy + 4, 0, fy + glassH);
+            dg.addColorStop(0, 'rgba(145,186,214,0.24)');
+            dg.addColorStop(1, 'rgba(16,30,44,0.52)');
+            g.fillStyle = dg;
+            g.fillRect(px + 3, fy + 3, pw - 6, glassH - 4);
+          }
+
+          // Subtle Venetian blind lines in upper third of selected panes
+          if (roomType > 0.55) {
+            const blindDrop = glassH * (0.22 + r() * 0.25);
+            g.fillStyle = 'rgba(235,240,245,0.16)';
+            g.fillRect(px + 4, fy + 4, pw - 8, blindDrop);
+            g.fillStyle = 'rgba(20,30,42,0.14)';
+            for (let by = fy + 6; by < fy + blindDrop; by += 5) {
+              g.fillRect(px + 4, by, pw - 8, 1.5);
+            }
+          }
+
+          // Top shadow cast by transom bar onto glass
+          g.fillStyle = 'rgba(8,14,22,0.32)';
+          g.fillRect(px + 3, fy + 2, pw - 6, 5);
         }
-        g.fillStyle = '#2b3640';
-        g.fillRect(0, f * fh + fh - 7, W, 7);
-        rg.fillStyle = 'rgb(120,120,120)';
-        rg.fillRect(0, f * fh + fh - 7, W, 7);
+
+        // Brushed aluminum & dark-glass spandrel band between floors
+        const spGrad = g.createLinearGradient(0, fy + glassH, 0, fy + fh);
+        spGrad.addColorStop(0, '#5a6b7a');
+        spGrad.addColorStop(0.18, '#23303d');
+        spGrad.addColorStop(0.82, '#1a2530');
+        spGrad.addColorStop(1, '#4b5a68');
+        g.fillStyle = spGrad;
+        g.fillRect(0, fy + glassH, W, 22);
+        rg.fillStyle = 'rgb(138,138,138)';
+        rg.fillRect(0, fy + glassH, W, 22);
+        bg.fillStyle = 'rgb(205,205,205)';
+        bg.fillRect(0, fy + glassH, W, 22);
       }
-      g.fillStyle = '#9aa3aa';
-      rg.fillStyle = 'rgb(90,90,90)';
-      for (let b = 0; b <= bays * 2; b++) {
-        g.fillRect(b * (bw / 2) - 1, 0, 2, H);
-        rg.fillRect(b * (bw / 2) - 1, 0, 2, H);
+
+      // Vertical extruded aluminum mullions (primary structural + secondary transom)
+      for (let b = 0; b <= paneCols; b++) {
+        const mx = Math.round(b * pw);
+        const primary = b % 2 === 0;
+        const mw = primary ? 6 : 3;
+        g.fillStyle = primary ? '#aeb9c4' : '#7a8894';
+        g.fillRect(mx - mw / 2, 0, mw, H);
+        g.fillStyle = 'rgba(10,16,24,0.45)';
+        g.fillRect(mx + mw / 2, 0, 2, H);
+        rg.fillStyle = primary ? 'rgb(92,92,92)' : 'rgb(112,112,112)';
+        rg.fillRect(mx - mw / 2, 0, mw, H);
+        bg.fillStyle = primary ? 'rgb(245,245,245)' : 'rgb(200,200,200)';
+        bg.fillRect(mx - mw / 2, 0, mw, H);
       }
     } else if (style === 'office') {
-      // Concrete office: ribbon windows between precast bands
-      g.fillStyle = '#b9b3a8';
+      // Architectural precast travertine & granite corporate tower with recessed ribbon glass + sun louvers
+      g.fillStyle = '#c8c0b4';
       g.fillRect(0, 0, W, H);
-      rg.fillStyle = 'rgb(225,225,225)';
+      rg.fillStyle = 'rgb(218,218,218)';
       rg.fillRect(0, 0, W, H);
+      bg.fillStyle = 'rgb(195,195,195)';
+      bg.fillRect(0, 0, W, H);
+
+      // Subtle architectural precast panel grain & joints
+      for (let i = 0; i < 600; i++) {
+        g.fillStyle = r() > 0.5 ? `rgba(255,252,245,${r() * 0.08})` : `rgba(80,74,64,${r() * 0.07})`;
+        g.fillRect(r() * W, r() * H, 4 + r() * 34, 2 + r() * 14);
+      }
+      g.fillStyle = 'rgba(70,64,56,0.22)';
+      for (let b = 0; b < bays * 2; b++) {
+        g.fillRect(b * (bw / 2), 0, 2, H);
+        bg.fillStyle = 'rgb(145,145,145)';
+        bg.fillRect(b * (bw / 2), 0, 2, H);
+      }
+
       for (let f = 0; f < floors; f++) {
-        const y = f * fh + fh * 0.28;
-        const h = fh * 0.5;
-        g.fillStyle = '#34414b';
-        g.fillRect(4, y, W - 8, h);
-        rg.fillStyle = 'rgb(25,25,25)';
-        rg.fillRect(4, y, W - 8, h);
-        for (let b = 0; b < bays * 2; b++) {
+        const fy = f * fh;
+        const winY = fy + fh * 0.24;
+        const winH = fh * 0.54;
+
+        // Projecting stone sill & lintel bevel
+        g.fillStyle = '#dfd8cc';
+        g.fillRect(0, winY - 5, W, 5);
+        g.fillStyle = '#8b8378';
+        g.fillRect(0, winY + winH, W, 4);
+        bg.fillStyle = 'rgb(235,235,235)';
+        bg.fillRect(0, winY - 5, W, 5);
+        bg.fillRect(0, winY + winH, W, 4);
+
+        // Recessed ribbon glazing
+        const wg = g.createLinearGradient(0, winY, 0, winY + winH);
+        wg.addColorStop(0, '#20303d');
+        wg.addColorStop(0.3, '#415d73');
+        wg.addColorStop(1, '#263947');
+        g.fillStyle = wg;
+        g.fillRect(8, winY, W - 16, winH);
+        rg.fillStyle = 'rgb(22,22,22)';
+        rg.fillRect(8, winY, W - 16, winH);
+        bg.fillStyle = 'rgb(60,60,60)';
+        bg.fillRect(8, winY, W - 16, winH);
+
+        // Interior office illumination + vertical architectural aluminum fins
+        const paneCount = bays * 2;
+        const pw = (W - 16) / paneCount;
+        for (let b = 0; b < paneCount; b++) {
+          const px = 8 + b * pw;
           const v = r();
-          g.fillStyle = v > 0.7 ? 'rgba(210,205,190,0.55)' : `rgba(110,135,150,${0.15 + r() * 0.2})`;
-          g.fillRect(4 + b * ((W - 8) / (bays * 2)) + 2, y + 2, (W - 8) / (bays * 2) - 4, h - 4);
+          if (v > 0.66) {
+            g.fillStyle = 'rgba(248,228,184,0.48)';
+            g.fillRect(px + 4, winY + 6, pw - 8, winH - 10);
+          } else {
+            g.fillStyle = `rgba(150,192,220,${0.16 + r() * 0.22})`;
+            g.fillRect(px + 4, winY + 5, pw - 8, winH - 9);
+          }
+          // Vertical sun-shading fin
+          g.fillStyle = '#9b958b';
+          g.fillRect(px - 2, winY - 2, 5, winH + 4);
+          rg.fillStyle = 'rgb(140,140,140)';
+          rg.fillRect(px - 2, winY - 2, 5, winH + 4);
+          bg.fillStyle = 'rgb(225,225,225)';
+          bg.fillRect(px - 2, winY - 2, 5, winH + 4);
         }
+
+        // Deep lintel shadow inside window recess
+        const sh = g.createLinearGradient(0, winY, 0, winY + 14);
+        sh.addColorStop(0, 'rgba(6,10,16,0.58)');
+        sh.addColorStop(1, 'rgba(6,10,16,0)');
+        g.fillStyle = sh;
+        g.fillRect(8, winY, W - 16, 14);
       }
     } else if (style === 'residential') {
-      // Indian apartment block: painted plaster, grilled windows, balconies, AC units
-      g.fillStyle = '#e9e3d6';
+      // Luxury contemporary urban & Indian apartment towers: warm stucco, recessed glass balconies, interior depth
+      g.fillStyle = '#ebe4d6';
       g.fillRect(0, 0, W, H);
-      rg.fillStyle = 'rgb(240,240,240)';
+      rg.fillStyle = 'rgb(232,232,232)';
       rg.fillRect(0, 0, W, H);
-      for (let i = 0; i < 400; i++) {
-        g.fillStyle = `rgba(80,70,50,${r() * 0.06})`;
-        g.fillRect(r() * W, r() * H, 2 + r() * 20, 2 + r() * 30);
+      bg.fillStyle = 'rgb(175,175,175)';
+      bg.fillRect(0, 0, W, H);
+
+      for (let i = 0; i < 750; i++) {
+        g.fillStyle = r() > 0.5 ? `rgba(255,252,245,${r() * 0.08})` : `rgba(88,76,58,${r() * 0.06})`;
+        g.fillRect(r() * W, r() * H, 4 + r() * 26, 3 + r() * 24);
       }
+
       for (let f = 0; f < floors; f++) {
+        const fy = f * fh;
         for (let b = 0; b < bays; b++) {
           const x = b * bw;
-          const y = f * fh;
-          const balcony = (b + f) % 2 === 0;
-          // window
-          g.fillStyle = '#2d3238';
-          g.fillRect(x + 12, y + 14, bw - 24, fh * 0.48);
-          rg.fillStyle = 'rgb(40,40,40)';
-          rg.fillRect(x + 12, y + 14, bw - 24, fh * 0.48);
-          const curtain = ['#c9b38a', '#8aa0b8', '#b97a6a', '#d8d2c4'][(r() * 4) | 0];
-          g.fillStyle = curtain;
-          g.globalAlpha = 0.55;
-          g.fillRect(x + 14, y + 16, (bw - 28) * (0.3 + r() * 0.5), fh * 0.44);
+          const hasBalcony = (b + f) % 2 === 0;
+
+          // Recessed window / balcony alcove
+          const rx = x + 16;
+          const ry = fy + 18;
+          const rw = bw - 32;
+          const rh = fh * 0.58;
+
+          // Deep interior shadow
+          const alc = g.createLinearGradient(0, ry, 0, ry + rh);
+          alc.addColorStop(0, '#1f262e');
+          alc.addColorStop(1, '#313b46');
+          g.fillStyle = alc;
+          g.fillRect(rx, ry, rw, rh);
+          rg.fillStyle = 'rgb(28,28,28)';
+          rg.fillRect(rx, ry, rw, rh);
+          bg.fillStyle = 'rgb(55,55,55)';
+          bg.fillRect(rx, ry, rw, rh);
+
+          // Warm lit curtains / interior depth
+          const curtainCols = ['#e6cfa3', '#9db4cc', '#d49a89', '#efe7d4', '#f8d99a'];
+          const lit = r() > 0.42;
+          g.fillStyle = curtainCols[(r() * curtainCols.length) | 0];
+          g.globalAlpha = lit ? 0.62 : 0.34;
+          g.fillRect(rx + 4, ry + 4, rw * (0.35 + r() * 0.45), rh - 8);
           g.globalAlpha = 1;
-          // grill
-          g.strokeStyle = 'rgba(30,30,30,0.7)';
-          g.lineWidth = 1;
-          for (let k = 1; k < 5; k++) {
-            g.beginPath();
-            g.moveTo(x + 12 + (k * (bw - 24)) / 5, y + 14);
-            g.lineTo(x + 12 + (k * (bw - 24)) / 5, y + 14 + fh * 0.48);
-            g.stroke();
+
+          // Crisp dark aluminum window frame & center sliding mullion
+          g.strokeStyle = '#1b222a';
+          g.lineWidth = 3;
+          g.strokeRect(rx + 1.5, ry + 1.5, rw - 3, rh - 3);
+          g.fillStyle = '#1b222a';
+          g.fillRect(rx + rw * 0.5 - 1.5, ry, 3, rh);
+
+          if (hasBalcony) {
+            // Frameless tinted glass balcony balustrade + projecting slab shadow
+            const balY = fy + fh * 0.54;
+            const balH = fh * 0.28;
+            g.fillStyle = 'rgba(130,175,205,0.42)';
+            g.fillRect(x + 10, balY, bw - 20, balH);
+            rg.fillStyle = 'rgb(24,24,24)';
+            rg.fillRect(x + 10, balY, bw - 20, balH);
+            // Brushed aluminum top handrail
+            g.fillStyle = '#d4dce3';
+            g.fillRect(x + 9, balY - 2, bw - 18, 4);
+            // Concrete balcony floor slab + deep under-slab shadow
+            g.fillStyle = '#dbd2c1';
+            g.fillRect(x + 8, balY + balH, bw - 16, 8);
+            bg.fillStyle = 'rgb(240,240,240)';
+            bg.fillRect(x + 8, balY + balH, bw - 16, 8);
+            g.fillStyle = 'rgba(15,18,24,0.34)';
+            g.fillRect(x + 8, balY + balH + 8, bw - 16, 7);
+          } else {
+            // Stone window sill + subtle under-sill shadow
+            g.fillStyle = '#d8cebc';
+            g.fillRect(rx - 4, ry + rh, rw + 8, 6);
+            bg.fillStyle = 'rgb(225,225,225)';
+            bg.fillRect(rx - 4, ry + rh, rw + 8, 6);
+            g.fillStyle = 'rgba(20,20,24,0.22)';
+            g.fillRect(rx - 3, ry + rh + 6, rw + 6, 5);
           }
-          if (balcony) {
-            g.fillStyle = '#d6cfc0';
-            g.fillRect(x + 6, y + fh * 0.62, bw - 12, fh * 0.2);
-            g.fillStyle = 'rgba(0,0,0,0.25)';
-            g.fillRect(x + 6, y + fh * 0.82, bw - 12, 3);
-          } else if (r() > 0.4) {
-            // split-AC outdoor unit
-            g.fillStyle = '#f2f2ee';
-            g.fillRect(x + bw * 0.55, y + fh * 0.66, bw * 0.32, fh * 0.17);
-            g.fillStyle = '#9a9a96';
-            g.beginPath();
-            g.arc(x + bw * 0.71, y + fh * 0.745, fh * 0.06, 0, Math.PI * 2);
-            g.fill();
-          }
-          // rain stain under window
-          const st = g.createLinearGradient(0, y + 14 + fh * 0.48, 0, y + fh);
-          st.addColorStop(0, 'rgba(60,55,45,0.18)');
-          st.addColorStop(1, 'rgba(60,55,45,0)');
-          g.fillStyle = st;
-          g.fillRect(x + 14, y + 14 + fh * 0.48, bw - 28, fh * 0.4);
         }
-        g.fillStyle = 'rgba(0,0,0,0.12)';
-        g.fillRect(0, f * fh + fh - 3, W, 3);
+        // Horizontal architectural floor band
+        g.fillStyle = '#d4cab6';
+        g.fillRect(0, fy + fh - 7, W, 7);
+        g.fillStyle = 'rgba(18,16,14,0.18)';
+        g.fillRect(0, fy + fh - 2, W, 2);
+        bg.fillStyle = 'rgb(215,215,215)';
+        bg.fillRect(0, fy + fh - 7, W, 7);
       }
     } else if (style === 'brick') {
-      // London / New York brick: stretcher-bond brick, white sash windows, stone lintels and sills
-      g.fillStyle = '#8a4a36';
+      // London / New York heritage stretcher-bond brickwork with stone lintels & recessed sash windows
+      g.fillStyle = '#8f4d38';
       g.fillRect(0, 0, W, H);
       rg.fillStyle = 'rgb(235,235,235)';
       rg.fillRect(0, 0, W, H);
-      const bh = 6;
+      bg.fillStyle = 'rgb(165,165,165)';
+      bg.fillRect(0, 0, W, H);
+
+      const bh = 10;
       for (let y = 0, row = 0; y < H; y += bh, row++) {
-        for (let x = -((row % 2) * 8); x < W; x += 16) {
-          const v = r() * 26 - 13;
-          g.fillStyle = `rgb(${138 + v},${74 + v * 0.6},${54 + v * 0.4})`;
-          g.fillRect(x + 1, y + 1, 14, bh - 1);
+        for (let x = -((row % 2) * 14); x < W; x += 28) {
+          const v = r() * 28 - 14;
+          g.fillStyle = `rgb(${142 + v},${76 + v * 0.6},${55 + v * 0.4})`;
+          g.fillRect(x + 1.5, y + 1.5, 25, bh - 2);
+          bg.fillStyle = `rgb(${175 + v * 0.5},${175 + v * 0.5},${175 + v * 0.5})`;
+          bg.fillRect(x + 1.5, y + 1.5, 25, bh - 2);
         }
       }
+
       for (let f = 0; f < floors; f++) {
         for (let b = 0; b < bays; b++) {
-          const x = b * bw + bw * 0.24;
-          const y = f * fh + fh * 0.2;
-          const w = bw * 0.52;
-          const h = fh * 0.56;
-          g.fillStyle = '#d9d4c7'; // stone lintel + sill
-          g.fillRect(x - 3, y - 5, w + 6, 5);
-          g.fillRect(x - 2, y + h, w + 4, 4);
-          g.fillStyle = '#f2f0ea'; // white frame
+          const x = b * bw + bw * 0.22;
+          const y = f * fh + fh * 0.18;
+          const w = bw * 0.56;
+          const h = fh * 0.6;
+          // Carved limestone lintel + keystone + projecting sill
+          g.fillStyle = '#e0d9cb';
+          g.fillRect(x - 6, y - 11, w + 12, 11);
+          g.fillStyle = '#ece6da';
+          g.fillRect(x + w * 0.5 - 7, y - 14, 14, 15);
+          g.fillStyle = '#d6cfc0';
+          g.fillRect(x - 5, y + h, w + 10, 8);
+          bg.fillStyle = 'rgb(245,245,245)';
+          bg.fillRect(x - 6, y - 11, w + 12, 11);
+          bg.fillRect(x - 5, y + h, w + 10, 8);
+
+          // Recessed white wooden sash frame
+          g.fillStyle = '#f5f2eb';
           g.fillRect(x, y, w, h);
-          g.fillStyle = r() > 0.75 ? '#c9b98f' : '#2b3138';
-          g.fillRect(x + 3, y + 3, w - 6, h / 2 - 4);
-          g.fillStyle = r() > 0.8 ? '#c9b98f' : '#262b31';
-          g.fillRect(x + 3, y + h / 2 + 1, w - 6, h / 2 - 4);
-          rg.fillStyle = 'rgb(40,40,40)';
-          rg.fillRect(x + 3, y + 3, w - 6, h - 6);
-          g.fillStyle = '#f2f0ea';
-          g.fillRect(x + w / 2 - 1, y, 2, h); // glazing bar
+          bg.fillStyle = 'rgb(65,65,65)';
+          bg.fillRect(x + 5, y + 5, w - 10, h - 10);
+          rg.fillStyle = 'rgb(26,26,26)';
+          rg.fillRect(x + 5, y + 5, w - 10, h - 10);
+
+          // Reflective upper & lower sash panes
+          const litTop = r() > 0.68;
+          const litBot = r() > 0.72;
+          g.fillStyle = litTop ? '#d9c596' : '#26323d';
+          g.fillRect(x + 5, y + 5, w - 10, h / 2 - 7);
+          g.fillStyle = litBot ? '#e3cb94' : '#1e2730';
+          g.fillRect(x + 5, y + h / 2 + 2, w - 10, h / 2 - 7);
+
+          // Sky glint across glass
+          g.fillStyle = 'rgba(186,225,250,0.16)';
+          g.fillRect(x + 6, y + 6, (w - 12) * 0.45, h - 12);
+
+          // Crisp Georgian glazing bars
+          g.fillStyle = '#f5f2eb';
+          g.fillRect(x + w / 2 - 2, y, 4, h);
+          g.fillRect(x, y + h / 2 - 2, w, 4);
         }
       }
     } else if (style === 'stone') {
-      // Haussmann limestone: rusticated base lines, tall French windows, wrought-iron balconies
-      g.fillStyle = '#e4d9c2';
+      // Haussmann Parisian / European dressed limestone with French windows & ornate wrought-iron balconies
+      g.fillStyle = '#e7ddc8';
       g.fillRect(0, 0, W, H);
-      rg.fillStyle = 'rgb(225,225,225)';
+      rg.fillStyle = 'rgb(220,220,220)';
       rg.fillRect(0, 0, W, H);
-      for (let i = 0; i < 260; i++) {
-        g.fillStyle = `rgba(90,80,60,${r() * 0.05})`;
-        g.fillRect(r() * W, r() * H, 3 + r() * 30, 2 + r() * 10);
+      bg.fillStyle = 'rgb(185,185,185)';
+      bg.fillRect(0, 0, W, H);
+
+      for (let i = 0; i < 420; i++) {
+        g.fillStyle = `rgba(95,84,64,${r() * 0.06})`;
+        g.fillRect(r() * W, r() * H, 6 + r() * 48, 3 + r() * 14);
       }
-      for (let y = 0; y < H; y += 10) {
-        g.fillStyle = 'rgba(120,105,80,0.18)';
-        g.fillRect(0, y, W, 1);
+      for (let y = 0; y < H; y += 18) {
+        g.fillStyle = 'rgba(115,102,78,0.2)';
+        g.fillRect(0, y, W, 2);
+        bg.fillStyle = 'rgb(140,140,140)';
+        bg.fillRect(0, y, W, 2);
       }
+
       for (let f = 0; f < floors; f++) {
         const balconyFloor = f === 1;
         for (let b = 0; b < bays; b++) {
-          const x = b * bw + bw * 0.27;
-          const y = f * fh + fh * 0.14;
-          const w = bw * 0.46;
-          const h = fh * 0.66;
-          g.fillStyle = '#d3c6aa'; // carved surround
-          g.fillRect(x - 3, y - 3, w + 6, h + 4);
+          const x = b * bw + bw * 0.25;
+          const y = f * fh + fh * 0.13;
+          const w = bw * 0.5;
+          const h = fh * 0.68;
+
+          // Carved stone surround + cornice pediment
+          g.fillStyle = '#d4c6aa';
+          g.fillRect(x - 6, y - 6, w + 12, h + 8);
+          bg.fillStyle = 'rgb(230,230,230)';
+          bg.fillRect(x - 6, y - 6, w + 12, h + 8);
           if (f === 2) {
-            g.beginPath(); // small pediment
-            g.moveTo(x - 5, y - 3);
-            g.lineTo(x + w / 2, y - 11);
-            g.lineTo(x + w + 5, y - 3);
+            g.beginPath();
+            g.moveTo(x - 10, y - 6);
+            g.lineTo(x + w / 2, y - 20);
+            g.lineTo(x + w + 10, y - 6);
             g.closePath();
             g.fill();
           }
-          g.fillStyle = '#2f343a';
+
+          // Deep recessed French glass doors
+          const fg = g.createLinearGradient(0, y, 0, y + h);
+          fg.addColorStop(0, '#222b33');
+          fg.addColorStop(1, '#34414d');
+          g.fillStyle = fg;
           g.fillRect(x, y, w, h);
-          rg.fillStyle = 'rgb(35,35,35)';
+          rg.fillStyle = 'rgb(22,22,22)';
           rg.fillRect(x, y, w, h);
-          g.fillStyle = 'rgba(210,215,220,0.18)';
-          g.fillRect(x + 2, y + 2, w / 2 - 3, h - 4);
-          g.fillStyle = '#efe7d6';
-          g.fillRect(x + w / 2 - 1, y, 2, h);
+          bg.fillStyle = 'rgb(60,60,60)';
+          bg.fillRect(x, y, w, h);
+
+          g.fillStyle = r() > 0.65 ? 'rgba(248,225,170,0.45)' : 'rgba(186,218,242,0.22)';
+          g.fillRect(x + 4, y + 4, w / 2 - 6, h - 8);
+          g.fillStyle = '#f2ead9';
+          g.fillRect(x + w / 2 - 2, y, 4, h);
+          g.fillRect(x, y + h * 0.35, w, 3);
+
           if (!balconyFloor) {
-            // individual Juliet balcony rail
-            g.fillStyle = '#1d1f22';
-            g.fillRect(x - 2, y + h * 0.62, w + 4, 2);
-            for (let k = 0; k <= 6; k++) g.fillRect(x - 2 + (k * (w + 4)) / 6, y + h * 0.62, 1, h * 0.38);
+            g.fillStyle = '#181a1e';
+            g.fillRect(x - 4, y + h * 0.64, w + 8, 3);
+            for (let k = 0; k <= 8; k++) {
+              g.fillRect(x - 4 + (k * (w + 8)) / 8, y + h * 0.64, 2, h * 0.36);
+            }
           }
         }
         if (balconyFloor) {
-          // continuous wrought-iron balcony along the whole floor
           const y = f * fh + fh * 0.62;
-          g.fillStyle = '#cfc2a6';
-          g.fillRect(0, y + fh * 0.18, W, 5);
-          g.fillStyle = '#1d1f22';
-          g.fillRect(0, y - 2, W, 2);
-          for (let x = 0; x < W; x += 5) g.fillRect(x, y - 2, 1, fh * 0.2);
+          g.fillStyle = '#cfc1a4';
+          g.fillRect(0, y + fh * 0.18, W, 10);
+          bg.fillStyle = 'rgb(245,245,245)';
+          bg.fillRect(0, y + fh * 0.18, W, 10);
+          g.fillStyle = '#181a1e';
+          g.fillRect(0, y - 3, W, 4);
+          for (let x = 0; x < W; x += 9) g.fillRect(x, y - 3, 2, fh * 0.21);
         }
-        g.fillStyle = '#d6c9ad';
-        g.fillRect(0, f * fh + fh - 5, W, 5); // string course
+        g.fillStyle = '#d6c8ab';
+        g.fillRect(0, f * fh + fh - 10, W, 10);
+        g.fillStyle = 'rgba(20,16,12,0.22)';
+        g.fillRect(0, f * fh + fh - 2, W, 2);
       }
     } else {
-      // Heritage / colonial: lime-washed walls, tall arched shuttered windows, cornices
-      g.fillStyle = '#efe6cf';
+      // Heritage / colonial sandstone & lime-wash: arched recessed windows, louvered shutters, deep stone cornices
+      g.fillStyle = '#f2e8d2';
       g.fillRect(0, 0, W, H);
-      rg.fillStyle = 'rgb(245,245,245)';
+      rg.fillStyle = 'rgb(235,235,235)';
       rg.fillRect(0, 0, W, H);
+      bg.fillStyle = 'rgb(180,180,180)';
+      bg.fillRect(0, 0, W, H);
+
+      for (let i = 0; i < 450; i++) {
+        g.fillStyle = `rgba(110,92,65,${r() * 0.06})`;
+        g.fillRect(r() * W, r() * H, 6 + r() * 36, 4 + r() * 20);
+      }
+
       for (let f = 0; f < floors; f++) {
         for (let b = 0; b < bays; b++) {
-          const x = b * bw + bw * 0.25;
-          const y = f * fh + fh * 0.18;
-          const w = bw * 0.5;
-          const h = fh * 0.62;
-          g.fillStyle = '#5c7a5a';
+          const x = b * bw + bw * 0.23;
+          const y = f * fh + fh * 0.16;
+          const w = bw * 0.54;
+          const h = fh * 0.64;
+
+          // Stone arch trim
+          g.fillStyle = '#d8c9a9';
+          g.beginPath();
+          g.moveTo(x - 6, y + h + 4);
+          g.lineTo(x - 6, y + w / 2);
+          g.arc(x + w / 2, y + w / 2, w / 2 + 6, Math.PI, 0);
+          g.lineTo(x + w + 6, y + h + 4);
+          g.closePath();
+          g.fill();
+
+          // Arched louvered shutter + recessed glass fanlight
+          g.fillStyle = '#3f5f46';
           g.beginPath();
           g.moveTo(x, y + h);
           g.lineTo(x, y + w / 2);
@@ -429,16 +696,29 @@ function buildFacades() {
           g.lineTo(x + w, y + h);
           g.closePath();
           g.fill();
-          g.strokeStyle = 'rgba(255,255,255,0.35)';
-          for (let k = 1; k < 6; k++) {
+
+          bg.fillStyle = 'rgb(75,75,75)';
+          bg.fillRect(x, y + w / 2, w, h - w / 2);
+          rg.fillStyle = 'rgb(50,50,50)';
+          rg.fillRect(x + 4, y + 6, w - 8, w / 2);
+
+          // Louver slats
+          g.strokeStyle = 'rgba(255,255,255,0.28)';
+          g.lineWidth = 2;
+          for (let k = 1; k < 9; k++) {
+            const ly = y + w / 2 + (k * (h - w / 2)) / 9;
             g.beginPath();
-            g.moveTo(x + 2, y + w / 2 + (k * (h - w / 2)) / 6);
-            g.lineTo(x + w - 2, y + w / 2 + (k * (h - w / 2)) / 6);
+            g.moveTo(x + 4, ly);
+            g.lineTo(x + w - 4, ly);
             g.stroke();
           }
         }
-        g.fillStyle = '#d9cdb0';
-        g.fillRect(0, f * fh + fh - 8, W, 8);
+        g.fillStyle = '#d7c9ab';
+        g.fillRect(0, f * fh + fh - 14, W, 14);
+        g.fillStyle = 'rgba(28,22,14,0.24)';
+        g.fillRect(0, f * fh + fh - 3, W, 3);
+        bg.fillStyle = 'rgb(240,240,240)';
+        bg.fillRect(0, f * fh + fh - 14, W, 14);
       }
     }
 
@@ -448,7 +728,11 @@ function buildFacades() {
     map.anisotropy = 8;
     const rough = keep(new THREE.CanvasTexture(rc));
     rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
-    return { map, rough };
+    rough.anisotropy = 4;
+    const bump = keep(new THREE.CanvasTexture(bc));
+    bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+    bump.anisotropy = 4;
+    return { map, rough, bump };
   };
 
   for (const s of ['glass', 'office', 'residential', 'heritage', 'brick', 'stone']) out[s] = mk(s);
@@ -480,11 +764,29 @@ export function getSurfaceGrain() {
     g.fill();
   }
   g.globalAlpha = 1;
+  const sImg = g.getImageData(0, 0, 512, 512);
+  const sData = sImg.data;
   for (let i = 0; i < 40000; i++) {
-    const v = 170 + r() * 85;
-    g.fillStyle = `rgba(${v | 0},${(v - 4) | 0},${(v - 10) | 0},0.5)`;
-    g.fillRect(r() * 512, r() * 512, 1 + r() * 1.5, 1 + r() * 1.5);
+    const v = (170 + r() * 85) | 0;
+    const vg = v - 4;
+    const vb = v - 10;
+    const x = (r() * 512) | 0;
+    const y = (r() * 512) | 0;
+    const w = 1 + ((r() * 1.5) | 0);
+    const h = 1 + ((r() * 1.5) | 0);
+    const maxY = y + h < 512 ? y + h : 512;
+    const maxX = x + w < 512 ? x + w : 512;
+    for (let py = y; py < maxY; py++) {
+      let idx = (py * 512 + x) << 2;
+      for (let px = x; px < maxX; px++) {
+        sData[idx] = (sData[idx] + v) >> 1;
+        sData[idx + 1] = (sData[idx + 1] + vg) >> 1;
+        sData[idx + 2] = (sData[idx + 2] + vb) >> 1;
+        idx += 4;
+      }
+    }
   }
+  g.putImageData(sImg, 0, 0);
   // vertical rain streaks
   for (let i = 0; i < 70; i++) {
     const x = r() * 512;
@@ -979,12 +1281,18 @@ function buildFrontage(group, r, a, city, track, avoid) {
     rough.userData = {};
     rough.repeat.copy(map.repeat);
     rough.needsUpdate = true;
+    const bump = facades[style].bump.clone();
+    bump.userData = {};
+    bump.repeat.copy(map.repeat);
+    bump.needsUpdate = true;
     const side = new THREE.MeshStandardMaterial({
       map,
       roughnessMap: rough,
+      bumpMap: bump,
+      bumpScale: style === 'glass' ? 0.28 : 0.42,
       roughness: 1,
-      metalness: style === 'glass' ? 0.55 : 0.02,
-      envMapIntensity: style === 'glass' ? 1.4 : 0.6,
+      metalness: style === 'glass' ? 0.68 : 0.04,
+      envMapIntensity: style === 'glass' ? 1.65 : 0.72,
     });
     const m = new THREE.InstancedMesh(unit, [side, side, roofMat, roofMat, side, side], max);
     m.count = 0;
@@ -1002,13 +1310,13 @@ function buildFrontage(group, r, a, city, track, avoid) {
   shopRough.userData = {};
   shopRough.repeat.copy(shopMap.repeat);
   shopRough.needsUpdate = true;
-  const shopSide = new THREE.MeshStandardMaterial({ map: shopMap, roughnessMap: shopRough, roughness: 1, envMapIntensity: 0.8 });
+  const shopSide = new THREE.MeshStandardMaterial({ map: shopMap, roughnessMap: shopRough, roughness: 1, envMapIntensity: 0.9 });
   const shopMesh = new THREE.InstancedMesh(unit, [shopSide, shopSide, roofMat, roofMat, shopSide, shopSide], max);
   shopMesh.count = 0;
   shopMesh.receiveShadow = true;
   shopMesh.castShadow = Q.tier !== 'low';
-  const corniceMat = new THREE.MeshStandardMaterial({ color: 0xcfc8ba, roughness: 0.85 });
-  const cornices = new THREE.InstancedMesh(unit, corniceMat, max);
+  const corniceMat = new THREE.MeshStandardMaterial({ color: 0xd6cfc0, roughness: 0.82 });
+  const cornices = new THREE.InstancedMesh(unit, corniceMat, max * 2);
   cornices.count = 0;
   const mansardGeo = new THREE.CylinderGeometry(0.5, 0.707, 1, 4, 1);
   mansardGeo.rotateY(Math.PI / 4);
@@ -1086,10 +1394,16 @@ function buildFrontage(group, r, a, city, track, avoid) {
         up.count++;
         // cornice band over the shops
         dummy.position.y = SHOP_H - 0.1;
-        dummy.scale.set(d + 0.6, 0.45, w + 0.05);
+        dummy.scale.set(d + 0.65, 0.48, w + 0.08);
         dummy.updateMatrix();
         cornices.setMatrixAt(cornices.count++, dummy.matrix);
-        if (a.roofs === 'mansard' && style === 'stone') {
+        // Architectural roof crown parapet cornice on every street building
+        if (!(a.roofs === 'mansard' && style === 'stone')) {
+          dummy.position.y = h;
+          dummy.scale.set(d + 0.5, 0.75, w + 0.5);
+          dummy.updateMatrix();
+          cornices.setMatrixAt(cornices.count++, dummy.matrix);
+        } else {
           dummy.position.y = h;
           dummy.scale.set(d, 3 + r() * 1.2, w);
           dummy.updateMatrix();
@@ -1144,20 +1458,26 @@ function buildSkyline(group, r, a) {
     const rough = f.rough.clone();
     rough.repeat.copy(map.repeat);
     rough.needsUpdate = true;
+    const bump = f.bump.clone();
+    bump.repeat.copy(map.repeat);
+    bump.needsUpdate = true;
     map.userData = {}; // per-city clones get disposed with the city
     rough.userData = {};
+    bump.userData = {};
     const side = new THREE.MeshStandardMaterial({
       map,
       roughnessMap: rough,
+      bumpMap: bump,
+      bumpScale: style === 'glass' ? 0.25 : 0.38,
       roughness: 1,
-      metalness: style === 'glass' ? 0.55 : 0.02,
-      envMapIntensity: style === 'glass' ? 1.4 : 0.6,
+      metalness: style === 'glass' ? 0.68 : 0.04,
+      envMapIntensity: style === 'glass' ? 1.65 : 0.72,
     });
     const box = new THREE.BoxGeometry(1, 1, 1);
     box.translate(0, 0.5, 0);
     // BoxGeometry groups: +x, -x, +y, -y, +z, -z
     const mats = [side, side, roofMat, roofMat, side, side];
-    const m = new THREE.InstancedMesh(box, mats, Q.buildings);
+    const m = new THREE.InstancedMesh(box, mats, Q.buildings * 2);
     m.count = 0;
     m.receiveShadow = true;
     m.castShadow = false;
@@ -1202,9 +1522,31 @@ function buildSkyline(group, r, a) {
   mansards.count = 0;
   const parapetGeo = new THREE.BoxGeometry(1, 1, 1);
   parapetGeo.translate(0, 0.5, 0);
-  const acMat = new THREE.MeshStandardMaterial({ color: 0xbdbdb8, roughness: 0.6, metalness: 0.4 });
-  const acUnits = new THREE.InstancedMesh(parapetGeo, acMat, Q.buildings * 2);
+  const acMat = new THREE.MeshStandardMaterial({ color: 0xbdbdb8, roughness: 0.55, metalness: 0.45 });
+  const acUnits = new THREE.InstancedMesh(parapetGeo, acMat, Q.buildings * 3);
   acUnits.count = 0;
+
+  // Tapered skyscraper spires & glowing red aviation beacons for world-class skylines
+  const spireGeo = new THREE.CylinderGeometry(0.12, 0.45, 1, 8);
+  spireGeo.translate(0, 0.5, 0);
+  const spires = new THREE.InstancedMesh(
+    spireGeo,
+    new THREE.MeshStandardMaterial({ color: 0xd8e0e8, roughness: 0.25, metalness: 0.85 }),
+    Q.buildings
+  );
+  spires.count = 0;
+  const beaconGeo = new THREE.SphereGeometry(0.65, 8, 8);
+  const beacons = new THREE.InstancedMesh(
+    beaconGeo,
+    new THREE.MeshStandardMaterial({
+      color: 0xff2a2a,
+      emissive: 0xff1e1e,
+      emissiveIntensity: 2.2,
+      roughness: 0.2,
+    }),
+    Q.buildings
+  );
+  beacons.count = 0;
 
   const dummy = new THREE.Object3D();
   const col = new THREE.Color();
@@ -1228,60 +1570,112 @@ function buildSkyline(group, r, a) {
     const w = c.w * (0.8 + r() * 0.4);
     const d = c.w * (0.7 + r() * 0.5);
     let styleIdx = pickWeighted(prof.styles, r);
-    if (ci === 2 && styleIdx >= 2) styleIdx = r() < 0.6 ? 0 : 1; // towers are glass/office
+    if (ci === 2 && styleIdx >= 2) styleIdx = r() < 0.65 ? 0 : 1; // towers are glass/office
     const style = STYLE_NAMES[styleIdx];
     const mesh = getMesh(style, ci);
-    if (mesh.count >= Q.buildings) continue;
+    if (mesh.count >= Q.buildings * 2 - 2) continue;
 
     const rotY = Math.round(r() * 4) * (Math.PI / 2) + (r() - 0.5) * 0.3;
+    const paints = PAINTS[style];
+    const paintHex = paints[(r() * paints.length) | 0];
+    col.setHex(paintHex);
+
     dummy.position.set(x, 0, z);
     dummy.rotation.set(0, rotY, 0);
     dummy.scale.set(w, h, d);
     dummy.updateMatrix();
     mesh.setMatrixAt(mesh.count, dummy.matrix);
-    const paints = PAINTS[style];
-    col.setHex(paints[(r() * paints.length) | 0]);
     mesh.setColorAt(mesh.count, col);
     mesh.count++;
     placed++;
 
-    if (roofs === 'mansard' && style === 'stone' && mansards.count < mansards.instanceMatrix.count) {
+    // Stepped architectural setback upper tier + spire on tall towers
+    let topY = h;
+    let topW = w;
+    let topD = d;
+    if (ci === 2 && (style === 'glass' || style === 'office') && r() < 0.68) {
+      const stepScale = 0.58 + r() * 0.16;
+      const stepH = h * (0.16 + r() * 0.14);
+      topW = w * stepScale;
+      topD = d * stepScale;
       dummy.position.set(x, h, z);
       dummy.rotation.set(0, rotY, 0);
-      dummy.scale.set(w, 3 + r() * 1.5, d);
+      dummy.scale.set(topW, stepH, topD);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(mesh.count, dummy.matrix);
+      mesh.setColorAt(mesh.count, col);
+      mesh.count++;
+      topY = h + stepH;
+
+      // Tapered architectural spire + red aviation warning light
+      if (r() < 0.62 && spires.count < spires.instanceMatrix.count) {
+        const spireH = 10 + r() * 18;
+        dummy.position.set(x, topY, z);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(1, spireH, 1);
+        dummy.updateMatrix();
+        spires.setMatrixAt(spires.count++, dummy.matrix);
+
+        if (beacons.count < beacons.instanceMatrix.count) {
+          dummy.position.set(x, topY + spireH, z);
+          dummy.scale.setScalar(1);
+          dummy.updateMatrix();
+          beacons.setMatrixAt(beacons.count++, dummy.matrix);
+        }
+      }
+    }
+
+    if (roofs === 'mansard' && style === 'stone' && mansards.count < mansards.instanceMatrix.count) {
+      dummy.position.set(x, topY, z);
+      dummy.rotation.set(0, rotY, 0);
+      dummy.scale.set(topW, 3 + r() * 1.5, topD);
       dummy.updateMatrix();
       mansards.setMatrixAt(mansards.count++, dummy.matrix);
       continue;
     }
 
-    // Rooftop clutter: water tanks on homes (black PVC in India, timber towers in New York), AC plant on offices
+    // Architectural roof parapet cap on modern towers
+    if (ci >= 1 && acUnits.count < acUnits.instanceMatrix.count) {
+      dummy.position.set(x, topY, z);
+      dummy.rotation.set(0, rotY, 0);
+      dummy.scale.set(topW + 0.4, 0.9, topD + 0.4);
+      dummy.updateMatrix();
+      acUnits.setMatrixAt(acUnits.count++, dummy.matrix);
+    }
+
+    // Rooftop clutter: water tanks on homes (black PVC in India, timber towers in New York), mechanical penthouse on offices
     const tankStyle = roofs === 'water-tower' ? style === 'brick' || style === 'heritage' : roofs === 'indian' && (style === 'residential' || style === 'heritage');
-    const roofItems = tankStyle ? (roofs === 'water-tower' ? (r() < 0.6 ? 1 : 0) : 1 + ((r() * 2) | 0)) : r() < 0.5 ? 1 : 0;
+    const roofItems = tankStyle ? (roofs === 'water-tower' ? (r() < 0.6 ? 1 : 0) : 1 + ((r() * 2) | 0)) : r() < 0.55 ? 1 : 0;
     for (let k = 0; k < roofItems; k++) {
-      const ox = (r() - 0.5) * w * 0.6;
-      const oz = (r() - 0.5) * d * 0.6;
+      const ox = (r() - 0.5) * topW * 0.52;
+      const oz = (r() - 0.5) * topD * 0.52;
       const cs = Math.cos(rotY);
       const sn = Math.sin(rotY);
       const px = x + ox * cs + oz * sn;
       const pz = z - ox * sn + oz * cs;
       if (tankStyle) {
         if (tanks.count < tanks.instanceMatrix.count) {
-          dummy.position.set(px, h, pz);
+          dummy.position.set(px, topY, pz);
           dummy.rotation.set(0, 0, 0);
           dummy.scale.setScalar(0.9 + r() * 0.5);
           dummy.updateMatrix();
           tanks.setMatrixAt(tanks.count++, dummy.matrix);
         }
       } else if (acUnits.count < acUnits.instanceMatrix.count) {
-        dummy.position.set(px, h, pz);
+        dummy.position.set(px, topY + 0.9, pz);
         dummy.rotation.set(0, rotY, 0);
-        dummy.scale.set(2.5 + r() * 2, 1.2 + r(), 2 + r() * 2);
+        dummy.scale.set(3 + r() * 2.5, 1.8 + r() * 1.4, 2.5 + r() * 2.5);
         dummy.updateMatrix();
         acUnits.setMatrixAt(acUnits.count++, dummy.matrix);
       }
     }
   }
-  group.add(tanks, acUnits, mansards);
+  for (const m of [tanks, acUnits, mansards, spires, beacons, ...Object.values(meshes)]) {
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    m.computeBoundingSphere();
+  }
+  group.add(tanks, acUnits, mansards, spires, beacons);
 }
 
 function buildMountains(group, r) {

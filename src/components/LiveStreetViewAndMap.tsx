@@ -1,19 +1,15 @@
-import React, { Component, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  APIProvider,
-  Map as GoogleMap,
-  useMap,
-  useMapsLibrary,
-} from '@vis.gl/react-google-maps';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Building2,
   Camera,
   Compass,
-  Eye,
+  HardDrive,
   Layers,
   LocateFixed,
-  Map as MapIcon,
+  Minus,
+  Moon,
   Navigation,
+  Plus,
   Satellite,
 } from 'lucide-react';
 import type { CircuitDefinition } from '../game/circuits';
@@ -21,20 +17,20 @@ import type { InterpolatedRoadPosition } from '../game/circuitMath';
 import {
   buildCircuit3DBuildings,
   computeBuilding3DExtrusion,
-  isWebGL2Available,
+  type BuildingFootprint3D,
 } from '../game/mapBuildings';
 import type { LiveParticipant } from '../types/race';
+import type { AuraDimmingLevel, AuraViewMode, XrDrivingInput } from '../game/xrAura';
 import {
   Photoreal3DViewport,
   type LiveThreeDTelemetry,
   type ThreeDCameraMode,
+  type XrSessionBridge,
 } from './Photoreal3DViewport';
 
 export type ViewportLayout = 'split' | 'streetview' | 'map';
-type FallbackMapStyleMode = 'hybrid-3d' | 'satellite' | 'street';
-type GoogleMapViewMode = '3d-hybrid' | '3d-satellite' | '2d-hybrid';
+type OfflineMapStyleMode = 'hybrid-3d' | 'satellite' | 'architectural-night';
 type MapCameraMode = 'follow' | 'circuit';
-type DriveFeedMode = '3d' | 'streetview';
 
 const THREE_D_CAMERAS: { id: ThreeDCameraMode; label: string }[] = [
   { id: 'CHASE', label: 'Chase Cam' },
@@ -52,13 +48,44 @@ interface LiveStreetViewAndMapProps {
   myParticipantId: string | null;
   layout: ViewportLayout;
   onLayoutChange: (layout: ViewportLayout) => void;
+  auraMode?: AuraViewMode;
+  auraDimming?: AuraDimmingLevel;
+  xrInputRef?: React.MutableRefObject<XrDrivingInput>;
+  xrBridgeRef?: React.MutableRefObject<XrSessionBridge | null>;
+  onWebXrStateChange?: (activeMode: 'immersive-ar' | 'immersive-vr' | null, error?: string) => void;
 }
 
-const MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim();
-const ATTRIBUTION_IDS = ['gmp_mcp_codeassist_v1_aistudio'];
+interface OfflineTileManifest {
+  tileCount?: number;
+  sat?: string[];
+  labels?: string[];
+  satTiles?: string[];
+  labelTiles?: string[];
+}
 
-// Module-level tile cache so real satellite & street map tiles never flicker across frames
-const tileImageCache: Record<string, HTMLImageElement | 'loading' | 'error'> = {};
+// Module-level local offline tile cache (reads strictly from bundled /offline-maps/*)
+const offlineTileCache: Record<string, HTMLImageElement | 'loading' | 'missing'> = {};
+let offlineManifestCache: { sat: Set<string>; labels: Set<string>; count: number } | null = null;
+let offlineManifestPromise: Promise<{ sat: Set<string>; labels: Set<string>; count: number }> | null =
+  null;
+
+function loadOfflineManifest(): Promise<{ sat: Set<string>; labels: Set<string>; count: number }> {
+  if (offlineManifestCache) return Promise.resolve(offlineManifestCache);
+  if (offlineManifestPromise) return offlineManifestPromise;
+  offlineManifestPromise = fetch('/offline-maps/manifest.json')
+    .then((res) => (res.ok ? (res.json() as Promise<OfflineTileManifest>) : null))
+    .then((data) => {
+      const sat = new Set<string>(data?.sat ?? data?.satTiles ?? []);
+      const labels = new Set<string>(data?.labels ?? data?.labelTiles ?? []);
+      offlineManifestCache = { sat, labels, count: data?.tileCount ?? sat.size + labels.size };
+      return offlineManifestCache;
+    })
+    .catch(() => {
+      offlineManifestCache = { sat: new Set(), labels: new Set(), count: 0 };
+      return offlineManifestCache;
+    });
+  return offlineManifestPromise;
+}
 
 function latLngToWorldPx(lat: number, lng: number, zoom: number): { x: number; y: number } {
   const scale = 256 * Math.pow(2, zoom);
@@ -69,551 +96,407 @@ function latLngToWorldPx(lat: number, lng: number, zoom: number): { x: number; y
   return { x, y };
 }
 
-function getTileUrl(style: FallbackMapStyleMode, z: number, x: number, y: number): string {
-  if (style === 'street') {
-    const sub = ['a', 'b', 'c', 'd'][Math.abs(x + y) % 4];
-    return `https://${sub}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}@2x.png`;
-  }
-  return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
-}
-
-function getSatelliteLabelsUrl(z: number, x: number, y: number): string {
-  return `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`;
-}
-
-function getSatelliteRoadsUrl(z: number, x: number, y: number): string {
-  return `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/${z}/${y}/${x}`;
-}
-
-class MapsErrorBoundary extends Component<
-  { fallback: React.ReactNode; children: React.ReactNode },
-  { hasError: boolean }
-> {
-  constructor(props: { fallback: React.ReactNode; children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError(): { hasError: boolean } {
-    return { hasError: true };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return this.props.fallback;
-    }
-    return this.props.children;
-  }
+function scalePolygonAroundCentroid(
+  pts: Array<{ x: number; y: number }>,
+  scale: number
+): Array<{ x: number; y: number }> {
+  const cx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
+  const cy = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+  return pts.map((p) => ({
+    x: cx + (p.x - cx) * scale,
+    y: cy + (p.y - cy) * scale,
+  }));
 }
 
 /**
- * Independent realtime Google Street View controller mounted directly inside <APIProvider>
- * so switching Map layers (3D Hybrid / 3D Satellite / 2D Hybrid) never resets Street View.
+ * Renders a single architectural extruded volume (base -> roof) with proper back-face
+ * wall culling, sunlit vs shaded sky-reflection gradients, architectural mullions,
+ * spandrel bands, and deterministic lit interior office windows.
  */
-function GoogleStreetViewController({
-  circuit,
-  roadPos,
-  panoContainerRef,
-  onStreetViewStatus,
-}: {
-  circuit: CircuitDefinition;
-  roadPos: InterpolatedRoadPosition;
-  panoContainerRef: React.RefObject<HTMLDivElement | null>;
-  onStreetViewStatus: (status: 'loading' | 'live' | 'fallback') => void;
-}) {
-  const streetViewLib = useMapsLibrary('streetView');
-  const panoramaRef = useRef<google.maps.StreetViewPanorama | null>(null);
-  const svServiceRef = useRef<google.maps.StreetViewService | null>(null);
-  const lastLookupPosRef = useRef<{ lat: number; lng: number; at: number }>({
-    lat: 0,
-    lng: 0,
-    at: 0,
-  });
+function drawArchitecturalVolume(
+  ctx: CanvasRenderingContext2D,
+  baseScreen: Array<{ x: number; y: number }>,
+  roofScreen: Array<{ x: number; y: number }>,
+  extrudePxY: number,
+  b: BuildingFootprint3D,
+  nightStyle: boolean
+) {
+  // Compute signed area in screen space to determine consistent outward normal orientation
+  let signedArea2 = 0;
+  for (let i = 0; i < baseScreen.length; i++) {
+    const a = baseScreen[i];
+    const c = baseScreen[(i + 1) % baseScreen.length];
+    signedArea2 += a.x * c.y - c.x * a.y;
+  }
+  const windingSign = signedArea2 >= 0 ? 1 : -1;
 
-  useEffect(() => {
-    if (!streetViewLib || !panoContainerRef.current) return;
-    let cancelled = false;
+  // Extrusion vector points upward-right (+ex, -ey); viewer looks from bottom-left (-ex, +ey)
+  const viewX = -0.18;
+  const viewY = 0.98;
 
-    const svService = new streetViewLib.StreetViewService();
-    svServiceRef.current = svService;
+  // Sort visible front-facing walls back-to-front by edge midpoint Y
+  const walls: Array<{
+    p0: { x: number; y: number };
+    p1: { x: number; y: number };
+    r0: { x: number; y: number };
+    r1: { x: number; y: number };
+    sunDot: number;
+    midY: number;
+    edgeLen: number;
+  }> = [];
 
-    let pano: google.maps.StreetViewPanorama | null = null;
-    try {
-      pano = new streetViewLib.StreetViewPanorama(panoContainerRef.current, {
-        position: circuit.waypoints[0],
-        pov: { heading: circuit.streetViewStartHeading, pitch: 2 },
-        zoom: 1,
-        disableDefaultUI: true,
-        addressControl: false,
-        linksControl: false,
-        panControl: false,
-        enableCloseButton: false,
-        motionTracking: false,
-        motionTrackingControl: false,
-        showRoadLabels: true,
-      });
-      panoramaRef.current = pano;
-    } catch {
-      onStreetViewStatus('fallback');
-      return;
-    }
+  for (let e = 0; e < 4; e++) {
+    const n = (e + 1) % 4;
+    const p0 = baseScreen[e];
+    const p1 = baseScreen[n];
+    const r0 = roofScreen[e];
+    const r1 = roofScreen[n];
 
-    const requestInitialPanorama = (source: google.maps.StreetViewSource, radius: number, allowRetry: boolean) => {
-      svService.getPanorama(
-        {
-          location: circuit.waypoints[0],
-          radius,
-          source,
-          preference: streetViewLib.StreetViewPreference.NEAREST,
-        },
-        (data, status) => {
-          if (cancelled || !panoramaRef.current) return;
-          if (status === 'OK' && data?.location?.pano) {
-            panoramaRef.current.setPano(data.location.pano);
-            panoramaRef.current.setPov({ heading: circuit.streetViewStartHeading, pitch: 2 });
-            onStreetViewStatus('live');
-          } else if (allowRetry) {
-            requestInitialPanorama(streetViewLib.StreetViewSource.DEFAULT, 350, false);
-          } else {
-            onStreetViewStatus('fallback');
-          }
-        }
-      );
-    };
+    const dx = p1.x - p0.x;
+    const dy = p1.y - p0.y;
+    const edgeLen = Math.hypot(dx, dy);
+    if (edgeLen < 1.2) continue;
 
-    requestInitialPanorama(streetViewLib.StreetViewSource.OUTDOOR, 220, true);
+    // Outward 2D normal for edge
+    const outX = (dy / edgeLen) * windingSign;
+    const outY = (-dx / edgeLen) * windingSign;
 
-    return () => {
-      cancelled = true;
-      panoramaRef.current = null;
-    };
-  }, [streetViewLib, circuit, panoContainerRef, onStreetViewStatus]);
+    // Only draw walls facing the camera (dot with camera view vector > -0.08)
+    const facing = outX * viewX + outY * viewY;
+    if (facing < -0.05) continue;
 
-  useEffect(() => {
-    const pano = panoramaRef.current;
-    const sv = svServiceRef.current;
-    if (!pano || !sv || !streetViewLib) return;
-
-    try {
-      pano.setPov({ heading: roadPos.heading, pitch: 1.5 });
-    } catch {
-      return;
-    }
-
-    const now = Date.now();
-    const dLat = Math.abs(roadPos.lat - lastLookupPosRef.current.lat);
-    const dLng = Math.abs(roadPos.lng - lastLookupPosRef.current.lng);
-    const approxMeters = Math.hypot(dLat, dLng) * 111_000;
-
-    if (approxMeters > 16 || now - lastLookupPosRef.current.at > 850) {
-      lastLookupPosRef.current = { lat: roadPos.lat, lng: roadPos.lng, at: now };
-      sv.getPanorama(
-        {
-          location: { lat: roadPos.lat, lng: roadPos.lng },
-          radius: 160,
-          source: streetViewLib.StreetViewSource.OUTDOOR,
-          preference: streetViewLib.StreetViewPreference.NEAREST,
-        },
-        (data, status) => {
-          if (status === 'OK' && data?.location?.pano && panoramaRef.current) {
-            panoramaRef.current.setPano(data.location.pano);
-            panoramaRef.current.setPov({ heading: roadPos.heading, pitch: 1.5 });
-            onStreetViewStatus('live');
-          }
-        }
-      );
-    }
-  }, [roadPos.lat, roadPos.lng, roadPos.heading, streetViewLib, onStreetViewStatus]);
-
-  return null;
-}
-
-/**
- * 2D Tilted Hybrid Google Maps controller (45° oblique satellite + imperative AdvancedMarkerElement).
- */
-function Google2DHybridController({
-  circuit,
-  roadPos,
-  participants,
-  myParticipantId,
-  cameraMode,
-  onAuthFailure,
-}: {
-  circuit: CircuitDefinition;
-  roadPos: InterpolatedRoadPosition;
-  participants: LiveParticipant[];
-  myParticipantId: string | null;
-  cameraMode: MapCameraMode;
-  onAuthFailure: () => void;
-}) {
-  const map = useMap();
-  const mapsLib = useMapsLibrary('maps');
-  const markerLib = useMapsLibrary('marker');
-  const polylineRef = useRef<google.maps.Polyline | null>(null);
-  const markersRef = useRef<Record<string, google.maps.marker.AdvancedMarkerElement>>({});
-
-  useEffect(() => {
-    if (!map || !mapsLib) return;
-    if (polylineRef.current) {
-      try {
-        polylineRef.current.setMap(null);
-      } catch {
-        // ignore
-      }
-    }
-    const path = [...circuit.waypoints, circuit.waypoints[0]].map((wp) => ({
-      lat: wp.lat,
-      lng: wp.lng,
-    }));
-    const poly = new mapsLib.Polyline({
-      path,
-      geodesic: true,
-      strokeColor: circuit.accentColor,
-      strokeOpacity: 0.95,
-      strokeWeight: 5,
+    // Sun comes from upper-left (-0.75, -0.65) or warm lower-left for strong architectural contrast
+    const sunDot = outX * -0.78 + outY * 0.62;
+    walls.push({
+      p0,
+      p1,
+      r0,
+      r1,
+      sunDot,
+      midY: (p0.y + p1.y) * 0.5,
+      edgeLen,
     });
-    poly.setMap(map);
-    polylineRef.current = poly;
-    map.setCenter(circuit.center);
-    map.setZoom(Math.max(16, circuit.defaultZoom + 1));
-    map.setTilt(45);
+  }
 
-    return () => {
-      try {
-        poly.setMap(null);
-      } catch {
-        // ignore
-      }
-    };
-  }, [map, mapsLib, circuit]);
+  walls.sort((a, c) => a.midY - c.midY);
 
-  useEffect(() => {
-    if (!map) return;
-    try {
-      if (cameraMode === 'follow') {
-        map.panTo({ lat: roadPos.lat, lng: roadPos.lng });
-        map.setHeading(roadPos.heading);
-        map.setTilt(45);
-      } else {
-        map.panTo(circuit.center);
-        map.setHeading(0);
-        map.setTilt(45);
-      }
-    } catch {
-      // ignore
+  for (let wi = 0; wi < walls.length; wi++) {
+    const { p0, p1, r0, r1, sunDot, edgeLen } = walls[wi];
+    const isSunlit = sunDot > 0.05;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.lineTo(r1.x, r1.y);
+    ctx.lineTo(r0.x, r0.y);
+    ctx.closePath();
+
+    // Vertical architectural sky-reflection / ambient-occlusion facade gradient
+    const baseMidY = (p0.y + p1.y) * 0.5;
+    const roofMidY = (r0.y + r1.y) * 0.5;
+    const wallGrad = ctx.createLinearGradient(0, roofMidY, 0, baseMidY);
+    if (nightStyle) {
+      wallGrad.addColorStop(0, isSunlit ? '#2e3f59' : '#1b2638');
+      wallGrad.addColorStop(1, isSunlit ? '#151f2e' : '#0b111c');
+    } else if (isSunlit) {
+      wallGrad.addColorStop(0, b.wallLitTopColor);
+      wallGrad.addColorStop(0.75, b.wallLitColor);
+      wallGrad.addColorStop(1, b.wallShadeColor);
+    } else {
+      wallGrad.addColorStop(0, b.wallShadeTopColor);
+      wallGrad.addColorStop(1, b.wallShadeColor);
     }
-  }, [map, roadPos.lat, roadPos.lng, roadPos.heading, cameraMode, circuit.center]);
+    ctx.fillStyle = wallGrad;
+    ctx.fill();
 
-  useEffect(() => {
-    if (!map || !markerLib) return;
-    const activeIds: Record<string, boolean> = {};
+    // Clip architectural facade details cleanly to this wall quad
+    ctx.clip();
 
-    try {
-      for (const p of participants) {
-        activeIds[p.id] = true;
-        const isMe = p.id === myParticipantId;
-        const pos = isMe ? { lat: roadPos.lat, lng: roadPos.lng } : { lat: p.lat, lng: p.lng };
-        const existing = markersRef.current[p.id];
+    // Diagonal sky-reflection Fresnel sheen on glass & stepped skyscrapers
+    if (
+      !nightStyle &&
+      (b.archetype === 'glass-tower' || b.archetype === 'stepped-skyscraper') &&
+      extrudePxY >= 12
+    ) {
+      const sheenGrad = ctx.createLinearGradient(r0.x, r0.y, p1.x, p1.y);
+      sheenGrad.addColorStop(0, 'rgba(224, 242, 254, 0)');
+      sheenGrad.addColorStop(0.45, isSunlit ? 'rgba(224, 242, 254, 0.24)' : 'rgba(148, 163, 184, 0.12)');
+      sheenGrad.addColorStop(0.55, 'rgba(255, 255, 255, 0.04)');
+      sheenGrad.addColorStop(1, 'rgba(224, 242, 254, 0)');
+      ctx.fillStyle = sheenGrad;
+      ctx.fill();
+    }
 
-        if (existing) {
-          existing.position = pos;
-        } else {
-          const badge = document.createElement('div');
-          badge.style.padding = '3px 8px';
-          badge.style.borderRadius = '6px';
-          badge.style.fontSize = '11px';
-          badge.style.fontWeight = '700';
-          badge.style.whiteSpace = 'nowrap';
-          badge.style.boxShadow = '0 4px 12px rgba(0,0,0,0.45)';
-          badge.style.border = isMe
-            ? '1.5px solid #fef3c7'
-            : p.agenticMode
-              ? '1.5px solid #a7f3d0'
-              : '1.5px solid #38bdf8';
-          badge.style.background = isMe
-            ? '#f59e0b'
-            : p.agenticMode
-              ? '#10b981'
-              : 'rgba(15, 23, 42, 0.94)';
-          badge.style.color = isMe || p.agenticMode ? '#090b10' : '#f8fafc';
-          badge.textContent = `${p.name} · ${p.locationCode}`;
+    // Architectural window grid: horizontal spandrels + vertical mullions + lit interior bays
+    if (extrudePxY >= 10 && edgeLen >= 8) {
+      const floors = Math.max(2, Math.min(12, Math.floor(extrudePxY / 5.2)));
+      const cols = Math.max(2, Math.min(b.bayCount, Math.floor(edgeLen / 4.8)));
 
-          const marker = new markerLib.AdvancedMarkerElement({
-            map,
-            position: pos,
-            content: badge,
-            title: `${p.name} (${p.locationName})`,
-          });
-          markersRef.current[p.id] = marker;
+      // Floor window ribbons + selective interior illumination
+      for (let fl = 0; fl < floors; fl++) {
+        const f0 = (fl + 0.22) / floors;
+        const f1 = (fl + 0.74) / floors;
+
+        // Subtle lit interior offices/apartments per bay
+        for (let col = 0; col < cols; col++) {
+          const hash = ((b.windowSeed + fl * 37 + col * 19 + wi * 11) * 2654435761) >>> 0;
+          const litChance = nightStyle || b.isNight ? 0.56 : 0.24;
+          const isLitBay = (hash % 100) / 100 < litChance;
+          if (!isLitBay && !nightStyle && b.archetype !== 'glass-tower') continue;
+
+          const u0 = (col + 0.12) / cols;
+          const u1 = (col + 0.88) / cols;
+
+          const interp = (u: number, v: number) => {
+            const bx = p0.x + (p1.x - p0.x) * u;
+            const by = p0.y + (p1.y - p0.y) * u;
+            const rx = r0.x + (r1.x - r0.x) * u;
+            const ry = r0.y + (r1.y - r0.y) * u;
+            return { x: bx + (rx - bx) * v, y: by + (ry - by) * v };
+          };
+
+          const q0 = interp(u0, f0);
+          const q1 = interp(u1, f0);
+          const q2 = interp(u1, f1);
+          const q3 = interp(u0, f1);
+
+          ctx.beginPath();
+          ctx.moveTo(q0.x, q0.y);
+          ctx.lineTo(q1.x, q1.y);
+          ctx.lineTo(q2.x, q2.y);
+          ctx.lineTo(q3.x, q3.y);
+          ctx.closePath();
+          ctx.fillStyle = isLitBay
+            ? b.windowGlowColor
+            : isSunlit
+              ? b.windowTint
+              : 'rgba(15, 23, 42, 0.35)';
+          ctx.fill();
+        }
+
+        // Structural floor spandrel line
+        const spFrac = (fl + 1) / floors;
+        if (fl < floors - 1) {
+          const sx0 = p0.x + (r0.x - p0.x) * spFrac;
+          const sy0 = p0.y + (r0.y - p0.y) * spFrac;
+          const sx1 = p1.x + (r1.x - p1.x) * spFrac;
+          const sy1 = p1.y + (r1.y - p1.y) * spFrac;
+          ctx.beginPath();
+          ctx.moveTo(sx0, sy0);
+          ctx.lineTo(sx1, sy1);
+          ctx.strokeStyle =
+            b.archetype === 'glass-tower' || b.archetype === 'stepped-skyscraper'
+              ? 'rgba(15, 23, 42, 0.42)'
+              : 'rgba(15, 23, 42, 0.28)';
+          ctx.lineWidth = 0.85;
+          ctx.stroke();
         }
       }
 
-      for (const id of Object.keys(markersRef.current)) {
-        if (!activeIds[id]) {
-          try {
-            markersRef.current[id].map = null;
-          } catch {
-            // ignore
-          }
-          delete markersRef.current[id];
-        }
+      // Vertical anodized aluminum mullions / pilasters
+      ctx.strokeStyle =
+        b.archetype === 'glass-tower' || b.archetype === 'stepped-skyscraper'
+          ? isSunlit
+            ? 'rgba(203, 213, 225, 0.34)'
+            : 'rgba(15, 23, 42, 0.45)'
+          : 'rgba(15, 23, 42, 0.25)';
+      ctx.lineWidth = 0.7;
+      for (let col = 1; col < cols; col++) {
+        const u = col / cols;
+        const bx = p0.x + (p1.x - p0.x) * u;
+        const by = p0.y + (p1.y - p0.y) * u;
+        const rx = r0.x + (r1.x - r0.x) * u;
+        const ry = r0.y + (r1.y - r0.y) * u;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(rx, ry);
+        ctx.stroke();
       }
-    } catch {
-      onAuthFailure();
-    }
-  }, [map, markerLib, participants, myParticipantId, roadPos.lat, roadPos.lng, onAuthFailure]);
-
-  useEffect(() => {
-    const store = markersRef.current;
-    return () => {
-      for (const id of Object.keys(store)) {
-        try {
-          store[id].map = null;
-        } catch {
-          // ignore
-        }
-        delete store[id];
-      }
-    };
-  }, []);
-
-  return null;
-}
-
-/**
- * Photorealistic Satellite 3D Hybrid Map powered by Google Maps JS `maps3d` (`Map3DElement`).
- * Mounted imperatively via `useMapsLibrary('maps3d')` (CF8 compliant, zero duplicate React hooks)
- * to render real 3D buildings, bridges, terrain, satellite imagery + street labels (`HYBRID`).
- */
-function GooglePhotorealistic3DMap({
-  circuit,
-  roadPos,
-  participants,
-  myParticipantId,
-  mapMode,
-  cameraMode,
-  onFallback2D,
-}: {
-  circuit: CircuitDefinition;
-  roadPos: InterpolatedRoadPosition;
-  participants: LiveParticipant[];
-  myParticipantId: string | null;
-  mapMode: '3d-hybrid' | '3d-satellite';
-  cameraMode: MapCameraMode;
-  onFallback2D: () => void;
-}) {
-  const maps3dLib = useMapsLibrary('maps3d');
-  const markerLib = useMapsLibrary('marker');
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const map3dRef = useRef<google.maps.maps3d.Map3DElement | null>(null);
-  const polylineRef = useRef<google.maps.maps3d.Polyline3DElement | null>(null);
-  const markersRef = useRef<Record<string, google.maps.maps3d.Marker3DElement>>({});
-
-  // Mount Map3DElement once when maps3d library is loaded
-  useEffect(() => {
-    if (!maps3dLib || !containerRef.current) return;
-    const host = containerRef.current;
-
-    let map3d: google.maps.maps3d.Map3DElement;
-    try {
-      map3d = new maps3dLib.Map3DElement({
-        center: { lat: circuit.center.lat, lng: circuit.center.lng, altitude: 0 },
-        range: 420,
-        tilt: 62,
-        heading: circuit.streetViewStartHeading,
-        roll: 0,
-        mode:
-          mapMode === '3d-satellite'
-            ? maps3dLib.MapMode.SATELLITE
-            : maps3dLib.MapMode.HYBRID,
-        gestureHandling: maps3dLib.GestureHandling.GREEDY,
-        internalUsageAttributionIds: ATTRIBUTION_IDS,
-      });
-    } catch {
-      onFallback2D();
-      return;
     }
 
-    map3d.style.display = 'block';
-    map3d.style.width = '100%';
-    map3d.style.height = '100%';
-
-    const handleError = () => onFallback2D();
-    map3d.addEventListener('gmp-error', handleError);
-    host.appendChild(map3d);
-    map3dRef.current = map3d;
-
-    return () => {
-      map3d.removeEventListener('gmp-error', handleError);
-      if (map3d.parentNode === host) {
-        host.removeChild(map3d);
-      }
-      map3dRef.current = null;
-      polylineRef.current = null;
-      markersRef.current = {};
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maps3dLib, onFallback2D]);
-
-  // Update 3D map mode (HYBRID with 3D buildings & labels vs SATELLITE)
-  useEffect(() => {
-    const map3d = map3dRef.current;
-    if (!map3d || !maps3dLib) return;
-    try {
-      map3d.mode =
-        mapMode === '3d-satellite'
-          ? maps3dLib.MapMode.SATELLITE
-          : maps3dLib.MapMode.HYBRID;
-    } catch {
-      // ignore
-    }
-  }, [mapMode, maps3dLib]);
-
-  // Update 3D chase / circuit overview camera smoothly
-  useEffect(() => {
-    const map3d = map3dRef.current;
-    if (!map3d) return;
-    try {
-      if (cameraMode === 'follow') {
-        map3d.center = { lat: roadPos.lat, lng: roadPos.lng, altitude: 0 };
-        map3d.range = 420;
-        map3d.tilt = 62;
-        map3d.heading = roadPos.heading;
-      } else {
-        map3d.center = { lat: circuit.center.lat, lng: circuit.center.lng, altitude: 0 };
-        map3d.range = 2100;
-        map3d.tilt = 52;
-        map3d.heading = 0;
-      }
-    } catch {
-      // ignore
-    }
-  }, [roadPos.lat, roadPos.lng, roadPos.heading, cameraMode, circuit.center]);
-
-  // Render glowing 3D circuit polyline
-  useEffect(() => {
-    const map3d = map3dRef.current;
-    if (!map3d || !maps3dLib) return;
-
-    if (polylineRef.current && polylineRef.current.parentNode === map3d) {
-      map3d.removeChild(polylineRef.current);
-      polylineRef.current = null;
+    // Ground-floor warm illuminated lobby / retail podium glow
+    if (extrudePxY >= 14) {
+      const lobbyFrac = Math.min(0.22, 6 / extrudePxY);
+      const lx0 = p0.x + (r0.x - p0.x) * lobbyFrac;
+      const ly0 = p0.y + (r0.y - p0.y) * lobbyFrac;
+      const lx1 = p1.x + (r1.x - p1.x) * lobbyFrac;
+      const ly1 = p1.y + (r1.y - p1.y) * lobbyFrac;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.lineTo(lx1, ly1);
+      ctx.lineTo(lx0, ly0);
+      ctx.closePath();
+      ctx.fillStyle = nightStyle || b.isNight ? 'rgba(251, 191, 36, 0.38)' : 'rgba(15, 23, 42, 0.35)';
+      ctx.fill();
     }
 
-    try {
-      const poly = new maps3dLib.Polyline3DElement({
-        strokeColor: circuit.accentColor,
-        strokeWidth: 9,
-        outerColor: '#090b10',
-        outerWidth: 0.35,
-        altitudeMode: maps3dLib.AltitudeMode.CLAMP_TO_GROUND,
-        drawsOccludedSegments: true,
-      });
-      const routePoints = [...circuit.waypoints, circuit.waypoints[0]].map((wp) => ({
-        lat: wp.lat,
-        lng: wp.lng,
-        altitude: 4,
-      }));
-      poly.path = routePoints;
-      map3d.appendChild(poly);
-      polylineRef.current = poly;
-    } catch {
-      // ignore
-    }
+    ctx.restore();
 
-    return () => {
-      if (polylineRef.current && polylineRef.current.parentNode === map3d) {
-        map3d.removeChild(polylineRef.current);
-        polylineRef.current = null;
-      }
-    };
-  }, [circuit, maps3dLib]);
+    // Crisp architectural corner seam
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(r0.x, r0.y);
+    ctx.strokeStyle = isSunlit ? 'rgba(241, 245, 249, 0.25)' : 'rgba(2, 6, 23, 0.55)';
+    ctx.lineWidth = 0.85;
+    ctx.stroke();
+  }
 
-  // Render extruded 3D markers for all connected racers
-  useEffect(() => {
-    const map3d = map3dRef.current;
-    if (!map3d || !maps3dLib) return;
-
-    const activeRacers =
-      participants.length > 0
-        ? participants
-        : [
-            {
-              id: myParticipantId ?? 'local',
-              name: 'You',
-              locationCode: 'LIVE',
-              lat: roadPos.lat,
-              lng: roadPos.lng,
-              heading: roadPos.heading,
-              agenticMode: false,
-            } as LiveParticipant,
-          ];
-
-    const activeIds: Record<string, boolean> = {};
-
-    try {
-      for (const p of activeRacers) {
-        activeIds[p.id] = true;
-        const isMe = p.id === myParticipantId;
-        const pos = isMe
-          ? { lat: roadPos.lat, lng: roadPos.lng, altitude: 18 }
-          : { lat: p.lat, lng: p.lng, altitude: 18 };
-        const existing = markersRef.current[p.id];
-
-        if (existing) {
-          existing.position = pos;
-        } else {
-          const marker = new maps3dLib.Marker3DElement({
-            position: pos,
-            altitudeMode: maps3dLib.AltitudeMode.RELATIVE_TO_GROUND,
-            extruded: true,
-            drawsWhenOccluded: true,
-            label: `${p.name} · ${p.locationCode}`,
-          });
-          if (markerLib?.PinElement) {
-            const pin = new markerLib.PinElement({
-              background: isMe ? '#f59e0b' : p.agenticMode ? '#10b981' : '#38bdf8',
-              borderColor: isMe ? '#fef3c7' : '#ffffff',
-              glyphColor: '#090b10',
-              scale: isMe ? 1.15 : 0.95,
-            });
-            marker.append(pin);
-          }
-          map3d.appendChild(marker);
-          markersRef.current[p.id] = marker;
-        }
-      }
-
-      for (const id of Object.keys(markersRef.current)) {
-        if (!activeIds[id]) {
-          const el = markersRef.current[id];
-          if (el.parentNode === map3d) {
-            map3d.removeChild(el);
-          }
-          delete markersRef.current[id];
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, [maps3dLib, markerLib, participants, myParticipantId, roadPos.lat, roadPos.lng, roadPos.heading]);
-
-  return (
-    <div
-      ref={containerRef}
-      data-testid="google-map-3d"
-      className="h-full w-full min-h-[220px] bg-[#0e161d]"
-    />
+  // Roof deck with recessed parapet border
+  ctx.beginPath();
+  roofScreen.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+  ctx.closePath();
+  const rcx = roofScreen.reduce((a, p) => a + p.x, 0) / 4;
+  const rcy = roofScreen.reduce((a, p) => a + p.y, 0) / 4;
+  const roofGrad = ctx.createLinearGradient(
+    roofScreen[0].x,
+    roofScreen[0].y,
+    roofScreen[2].x,
+    roofScreen[2].y
   );
+  if (nightStyle) {
+    roofGrad.addColorStop(0, '#29364a');
+    roofGrad.addColorStop(1, '#161e2c');
+  } else {
+    roofGrad.addColorStop(0, b.roofAccentColor);
+    roofGrad.addColorStop(0.4, b.roofColor);
+    roofGrad.addColorStop(1, b.wallShadeColor);
+  }
+  ctx.fillStyle = roofGrad;
+  ctx.fill();
+
+  // Parapet coping edge
+  ctx.strokeStyle =
+    nightStyle || b.isNight
+      ? b.isLandmark
+        ? b.roofAccentColor
+        : 'rgba(148, 163, 184, 0.35)'
+      : b.isLandmark
+        ? 'rgba(248, 250, 252, 0.55)'
+        : 'rgba(226, 232, 240, 0.35)';
+  ctx.lineWidth = b.isLandmark ? 1.35 : 0.9;
+  ctx.stroke();
+
+  // Recessed inner roof gravel/membrane membrane deck
+  const innerDeck = scalePolygonAroundCentroid(roofScreen, 0.78);
+  ctx.beginPath();
+  innerDeck.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(9, 13, 20, 0.24)';
+  ctx.fill();
+
+  return { rcx, rcy, innerDeck };
 }
 
 /**
- * Real-World Satellite 3D Hybrid Tile Map with Realistic Depth-Sorted 3D Extruded Buildings.
- * Uses real Esri World Imagery satellite tiles + Reference Road/Place Labels (zero gridlines),
- * plus architectural 3D building extrusions with sunlit roofs, shaded facades, window grids,
- * and ground shadows whenever Google Maps is unavailable.
+ * Draws detailed rooftop architectural craftsmanship: helipads, glass skylights,
+ * mechanical HVAC penthouses, heritage domes, or tapered spires with aviation beacons.
  */
-function RealWorldTileMap({
+function drawRooftopDetails(
+  ctx: CanvasRenderingContext2D,
+  roofScreen: Array<{ x: number; y: number }>,
+  rcx: number,
+  rcy: number,
+  b: BuildingFootprint3D,
+  pxPerMeter: number,
+  nightStyle: boolean
+) {
+  const spanX = Math.hypot(roofScreen[1].x - roofScreen[0].x, roofScreen[1].y - roofScreen[0].y);
+  const spanY = Math.hypot(roofScreen[2].x - roofScreen[1].x, roofScreen[2].y - roofScreen[1].y);
+  const minSpan = Math.min(spanX, spanY);
+  if (minSpan < 7) return;
+
+  if (b.rooftopFeature === 'dome') {
+    const r = Math.min(11, minSpan * 0.34);
+    const domeGrad = ctx.createRadialGradient(rcx - r * 0.3, rcy - r * 0.45, r * 0.15, rcx, rcy - r * 0.15, r);
+    domeGrad.addColorStop(0, '#fef3c7');
+    domeGrad.addColorStop(0.45, '#d97706');
+    domeGrad.addColorStop(1, '#78350f');
+    ctx.fillStyle = domeGrad;
+    ctx.beginPath();
+    ctx.arc(rcx, rcy - r * 0.25, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(254, 243, 199, 0.5)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+  } else if (b.rooftopFeature === 'helipad' && minSpan >= 13) {
+    const r = Math.min(9.5, minSpan * 0.32);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+    ctx.beginPath();
+    ctx.arc(rcx, rcy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fbbf24';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    // Crisp "H" marking
+    const hs = r * 0.45;
+    ctx.strokeStyle = '#fef3c7';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(rcx - hs * 0.7, rcy - hs);
+    ctx.lineTo(rcx - hs * 0.7, rcy + hs);
+    ctx.moveTo(rcx + hs * 0.7, rcy - hs);
+    ctx.lineTo(rcx + hs * 0.7, rcy + hs);
+    ctx.moveTo(rcx - hs * 0.7, rcy);
+    ctx.lineTo(rcx + hs * 0.7, rcy);
+    ctx.stroke();
+  } else if (b.rooftopFeature === 'skylight' && minSpan >= 10) {
+    const skyPoly = scalePolygonAroundCentroid(roofScreen, 0.42);
+    ctx.beginPath();
+    skyPoly.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+    ctx.closePath();
+    ctx.fillStyle = nightStyle || b.isNight ? 'rgba(56, 189, 248, 0.55)' : 'rgba(186, 230, 253, 0.52)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(241, 245, 249, 0.6)';
+    ctx.lineWidth = 0.75;
+    ctx.stroke();
+  } else if (b.rooftopFeature === 'hvac' && minSpan >= 9) {
+    const mech = scalePolygonAroundCentroid(roofScreen, 0.34);
+    const mechTop = mech.map((p) => ({ x: p.x + 0.8, y: p.y - 3.2 }));
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.35)';
+    ctx.beginPath();
+    mech.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x + 2, p.y + 1.5) : ctx.lineTo(p.x + 2, p.y + 1.5)));
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = nightStyle ? '#334155' : '#94a3b8';
+    ctx.beginPath();
+    mechTop.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Architectural tapered spire + aviation warning beacon on supertalls
+  if (b.spireMeters > 0) {
+    const spirePx = Math.max(8, Math.min(28, b.spireMeters * pxPerMeter * 0.55));
+    const tipX = rcx + spirePx * 0.14;
+    const tipY = rcy - spirePx;
+
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(rcx, rcy);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+
+    // Red aviation obstruction beacon
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.35)';
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
+ * 100% Local Offline 3D Satellite Map with World-Class Architectural Buildings.
+ * Reads satellite imagery and place labels exclusively from bundled `/offline-maps/*`
+ * with zero external map API requests.
+ */
+function Offline3DSatelliteMap({
   circuit,
   roadPos,
   participants,
@@ -625,9 +508,31 @@ function RealWorldTileMap({
   myParticipantId: string | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [mapStyle, setMapStyle] = useState<FallbackMapStyleMode>('hybrid-3d');
+  const [mapStyle, setMapStyle] = useState<OfflineMapStyleMode>(() =>
+    circuit.night ? 'architectural-night' : 'hybrid-3d'
+  );
   const [cameraMode, setCameraMode] = useState<MapCameraMode>('follow');
+  const [zoomDelta, setZoomDelta] = useState<number>(0);
   const [tileTick, setTileTick] = useState(0);
+  const [offlinePackCount, setOfflinePackCount] = useState<number>(0);
+
+  // Sync night-circuit default aesthetic on circuit switch
+  useEffect(() => {
+    setMapStyle(circuit.night ? 'architectural-night' : 'hybrid-3d');
+  }, [circuit.id, circuit.night]);
+
+  useEffect(() => {
+    let active = true;
+    loadOfflineManifest().then((m) => {
+      if (active) {
+        setOfflinePackCount(m.count);
+        setTileTick((t) => (t + 1) % 10000);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const buildings3D = useMemo(() => buildCircuit3DBuildings(circuit), [circuit]);
 
@@ -645,19 +550,21 @@ function RealWorldTileMap({
     return {
       lat: (minLat + maxLat) / 2,
       lng: (minLng + maxLng) / 2,
-      zoom: Math.max(13, circuit.defaultZoom - 1),
+      zoom: 14,
     };
   }, [circuit]);
 
   const lastDrawRef = useRef<{
     at: number;
-    style: FallbackMapStyleMode;
+    style: OfflineMapStyleMode;
     mode: MapCameraMode;
+    zoomDelta: number;
     tick: number;
   }>({
     at: 0,
     style: 'hybrid-3d',
     mode: 'follow',
+    zoomDelta: 0,
     tick: -1,
   });
 
@@ -668,14 +575,21 @@ function RealWorldTileMap({
     const forceDraw =
       lastDrawRef.current.style !== mapStyle ||
       lastDrawRef.current.mode !== cameraMode ||
+      lastDrawRef.current.zoomDelta !== zoomDelta ||
       lastDrawRef.current.tick !== tileTick;
-    if (!forceDraw && now - lastDrawRef.current.at < 50) return;
-    lastDrawRef.current = { at: now, style: mapStyle, mode: cameraMode, tick: tileTick };
+    if (!forceDraw && now - lastDrawRef.current.at < 45) return;
+    lastDrawRef.current = {
+      at: now,
+      style: mapStyle,
+      mode: cameraMode,
+      zoomDelta,
+      tick: tileTick,
+    };
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = Math.max(240, Math.floor(canvas.clientWidth || 480));
     const h = Math.max(200, Math.floor(canvas.clientHeight || 360));
     const targetW = Math.floor(w * dpr);
@@ -686,10 +600,11 @@ function RealWorldTileMap({
     }
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = mapStyle === 'street' ? '#dfe7ef' : '#0e161d';
+    ctx.fillStyle = mapStyle === 'architectural-night' ? '#0a101b' : '#0f1722';
     ctx.fillRect(0, 0, w, h);
 
-    const tileZ = Math.round(cameraMode === 'follow' ? 16 : circuitCenterAndZoom.zoom);
+    const baseZoom = cameraMode === 'follow' ? 16 : circuitCenterAndZoom.zoom;
+    const tileZ = Math.max(14, Math.min(17, baseZoom + zoomDelta));
     const centerLat = cameraMode === 'follow' ? roadPos.lat : circuitCenterAndZoom.lat;
     const centerLng = cameraMode === 'follow' ? roadPos.lng : circuitCenterAndZoom.lng;
     const centerWorld = latLngToWorldPx(centerLat, centerLng, tileZ);
@@ -702,164 +617,210 @@ function RealWorldTileMap({
     const minTileY = Math.floor(topLeftY / 256);
     const maxTileY = Math.floor((topLeftY + h) / 256);
     const numTiles = Math.pow(2, tileZ);
+    const manifest = offlineManifestCache;
 
-    const drawTileLayer = (urlBuilder: (z: number, x: number, y: number) => string, alpha = 1) => {
+    const requestOfflineImage = (url: string): HTMLImageElement | null => {
+      const cached = offlineTileCache[url];
+      if (cached instanceof HTMLImageElement) return cached;
+      if (cached === 'loading' || cached === 'missing') return null;
+      offlineTileCache[url] = 'loading';
+      const img = new Image();
+      img.onload = () => {
+        offlineTileCache[url] = img;
+        setTileTick((t) => (t + 1) % 10000);
+      };
+      img.onerror = () => {
+        offlineTileCache[url] = 'missing';
+      };
+      img.src = url;
+      return null;
+    };
+
+    // Draw local offline tile with automatic parent-tile sub-rect upscaling (z=16->15->14)
+    const drawOfflineLayer = (
+      kind: 'sat' | 'labels',
+      ext: 'jpg' | 'png',
+      maxOfflineZoom: number,
+      alpha: number
+    ) => {
+      const availSet = kind === 'sat' ? manifest?.sat : manifest?.labels;
       ctx.save();
       ctx.globalAlpha = alpha;
+
       for (let tx = minTileX; tx <= maxTileX; tx++) {
         for (let ty = minTileY; ty <= maxTileY; ty++) {
           if (ty < 0 || ty >= numTiles) continue;
           const wrappedX = ((tx % numTiles) + numTiles) % numTiles;
-          const url = urlBuilder(tileZ, wrappedX, ty);
-          const cached = tileImageCache[url];
           const drawX = Math.floor(tx * 256 - topLeftX);
           const drawY = Math.floor(ty * 256 - topLeftY);
 
-          if (cached instanceof HTMLImageElement) {
-            ctx.drawImage(cached, drawX, drawY, 256, 256);
-          } else if (!cached) {
-            tileImageCache[url] = 'loading';
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.referrerPolicy = 'no-referrer';
-            img.onload = () => {
-              tileImageCache[url] = img;
-              setTileTick((t) => (t + 1) % 10000);
-            };
-            img.onerror = () => {
-              tileImageCache[url] = 'error';
-            };
-            img.src = url;
+          // Find highest-resolution downloaded offline tile covering (tileZ, wrappedX, ty)
+          let drawn = false;
+          const startZ = Math.min(tileZ, maxOfflineZoom);
+          for (let tryZ = startZ; tryZ >= 14; tryZ--) {
+            const dz = tileZ - tryZ;
+            const px = wrappedX >> dz;
+            const py = ty >> dz;
+            const key = `${tryZ}/${px}/${py}`;
+            if (availSet && availSet.size > 0 && !availSet.has(key)) continue;
+
+            const url = `/offline-maps/${kind}/${key}.${ext}`;
+            const img = requestOfflineImage(url);
+            if (img) {
+              if (dz === 0) {
+                ctx.drawImage(img, drawX, drawY, 256, 256);
+              } else {
+                const factor = 1 << dz;
+                const subSize = 256 / factor;
+                const sx = (wrappedX % factor) * subSize;
+                const sy = (ty % factor) * subSize;
+                ctx.drawImage(img, sx, sy, subSize, subSize, drawX, drawY, 256, 256);
+              }
+              drawn = true;
+              break;
+            }
+          }
+
+          // Subtle architectural slate tile fill while first paint streams in
+          if (!drawn && kind === 'sat') {
+            ctx.fillStyle = '#101a28';
+            ctx.fillRect(drawX, drawY, 256, 256);
           }
         }
       }
       ctx.restore();
     };
 
-    // Base real-world satellite or street tiles
-    drawTileLayer((z, x, y) => getTileUrl(mapStyle, z, x, y), 1);
+    // 1. Bundled Offline Satellite Imagery Layer
+    drawOfflineLayer('sat', 'jpg', 16, 1);
 
-    // Hybrid roads + city/landmark labels overlay on Satellite & 3D Hybrid
-    if (mapStyle !== 'street') {
-      drawTileLayer(getSatelliteRoadsUrl, 0.72);
-      drawTileLayer(getSatelliteLabelsUrl, 0.9);
-      ctx.fillStyle = 'rgba(9, 13, 20, 0.14)';
+    // 2. Color grade & local offline place labels
+    if (mapStyle === 'architectural-night') {
+      ctx.fillStyle = 'rgba(6, 11, 22, 0.56)';
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      ctx.fillStyle = 'rgba(8, 13, 22, 0.14)';
       ctx.fillRect(0, 0, w, h);
     }
+    drawOfflineLayer('labels', 'png', 15, mapStyle === 'architectural-night' ? 0.78 : 0.92);
 
     const project = (lat: number, lng: number) => {
       const wp = latLngToWorldPx(lat, lng, tileZ);
       return { x: wp.x - topLeftX, y: wp.y - topLeftY };
     };
 
-    // Circuit track polyline on ground plane
+    // 3. Circuit Asphalt Route & Glowing Racing Line
     const pts = circuit.waypoints.map((wp) => project(wp.lat, wp.lng));
-    ctx.beginPath();
-    pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-    ctx.closePath();
-    ctx.strokeStyle = 'rgba(9, 11, 16, 0.85)';
-    ctx.lineWidth = 9;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
+    if (pts.length >= 2) {
+      // Soft outer glow
+      ctx.save();
+      ctx.beginPath();
+      pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      ctx.closePath();
+      ctx.strokeStyle = 'rgba(9, 11, 16, 0.9)';
+      ctx.lineWidth = 11;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
 
-    ctx.beginPath();
-    pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-    ctx.closePath();
-    ctx.strokeStyle = circuit.accentColor;
-    ctx.lineWidth = 4;
-    ctx.stroke();
+      ctx.beginPath();
+      pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      ctx.closePath();
+      ctx.strokeStyle = circuit.accentColor;
+      ctx.lineWidth = 4.5;
+      ctx.stroke();
 
-    // Realistic 3D Building Extrusion Layer (when in 3D Hybrid mode)
-    if (mapStyle === 'hybrid-3d') {
+      // Subtle dashed white centerline along racing loop
+      ctx.setLineDash([7, 9]);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.52)';
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 4. World-Class Photorealistic 3D Architectural Buildings Layer
+    if (mapStyle !== 'satellite') {
+      const nightBuildings = mapStyle === 'architectural-night' || Boolean(circuit.night);
       const metersPerPx =
         (156543.03392 * Math.cos((centerLat * Math.PI) / 180)) / Math.pow(2, tileZ);
-      const pxPerMeter = 1 / Math.max(0.25, metersPerPx);
+      const pxPerMeter = 1 / Math.max(0.22, metersPerPx);
 
       const visibleBuildings = buildings3D
         .map((b) => {
           const baseScreen = b.corners.map((c) => project(c.lat, c.lng));
-          const geom = computeBuilding3DExtrusion(baseScreen, b.heightMeters, pxPerMeter, 0.56);
-          return { b, geom };
+          const mainHeight =
+            b.setbackScale > 0 ? b.heightMeters * (1 - b.setbackHeightRatio) : b.heightMeters;
+          const geom = computeBuilding3DExtrusion(baseScreen, mainHeight, pxPerMeter, 0.64);
+          return { b, geom, mainHeight };
         })
         .filter(({ geom }) =>
-          geom.baseScreen.some((p) => p.x >= -90 && p.x <= w + 90 && p.y >= -90 && p.y <= h + 110)
+          geom.baseScreen.some((p) => p.x >= -110 && p.x <= w + 110 && p.y >= -110 && p.y <= h + 130)
         )
-        .sort((a, b) => a.geom.sortY - b.geom.sortY);
+        .sort((a, c) => a.geom.sortY - c.geom.sortY);
 
+      // Pass A: Soft directional sun-cast shadows on satellite ground
       for (const { b, geom } of visibleBuildings) {
-        const { baseScreen, roofScreen, extrudePxY } = geom;
-
-        // Directional architectural cast shadow on satellite ground
-        ctx.fillStyle = 'rgba(4, 8, 16, 0.36)';
+        const totalShadowLen = geom.extrudePxY * (b.setbackScale > 0 ? 1.25 : 1);
+        ctx.fillStyle = nightBuildings ? 'rgba(2, 6, 14, 0.52)' : 'rgba(5, 10, 20, 0.34)';
         ctx.beginPath();
-        baseScreen.forEach((p, idx) => {
-          const sx = p.x + extrudePxY * 0.42;
-          const sy = p.y + extrudePxY * 0.24;
+        geom.baseScreen.forEach((p, idx) => {
+          const sx = p.x + totalShadowLen * 0.44;
+          const sy = p.y + totalShadowLen * 0.25;
           if (idx === 0) ctx.moveTo(sx, sy);
           else ctx.lineTo(sx, sy);
         });
         ctx.closePath();
         ctx.fill();
 
-        // Extruded vertical walls (back-to-front faces with sunlit vs shaded facades)
-        for (let e = 0; e < 4; e++) {
-          const n = (e + 1) % 4;
-          const p0 = baseScreen[e];
-          const p1 = baseScreen[n];
-          const r0 = roofScreen[e];
-          const r1 = roofScreen[n];
+        // Dark contact ambient-occlusion halo right under the building footprint
+        ctx.strokeStyle = 'rgba(2, 6, 14, 0.55)';
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        geom.baseScreen.forEach((p, idx) =>
+          idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)
+        );
+        ctx.closePath();
+        ctx.stroke();
+      }
 
-          // Draw front-facing vertical facades
-          const edgeDx = p1.x - p0.x;
-          const edgeDy = p1.y - p0.y;
-          const isLit = edgeDx + edgeDy > 0;
+      // Pass B: Back-to-front multi-tier architectural buildings + rooftop details
+      for (const { b, geom } of visibleBuildings) {
+        const lowerRoof = drawArchitecturalVolume(
+          ctx,
+          geom.baseScreen,
+          geom.roofScreen,
+          geom.extrudePxY,
+          b,
+          nightBuildings
+        );
 
-          ctx.beginPath();
-          ctx.moveTo(p0.x, p0.y);
-          ctx.lineTo(p1.x, p1.y);
-          ctx.lineTo(r1.x, r1.y);
-          ctx.lineTo(r0.x, r0.y);
-          ctx.closePath();
-          ctx.fillStyle = isLit ? b.wallLitColor : b.wallShadeColor;
-          ctx.fill();
-          ctx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
-          ctx.lineWidth = 0.8;
-          ctx.stroke();
+        let topRoofScreen = geom.roofScreen;
+        let topRcx = lowerRoof.rcx;
+        let topRcy = lowerRoof.rcy;
 
-          // Architectural window floor strips on tall buildings
-          if (extrudePxY >= 14) {
-            const floors = Math.min(7, Math.floor(extrudePxY / 6.5));
-            ctx.strokeStyle = b.windowTint;
-            ctx.lineWidth = 1.1;
-            for (let fl = 1; fl <= floors; fl++) {
-              const frac = fl / (floors + 1);
-              const wx0 = p0.x + (r0.x - p0.x) * frac;
-              const wy0 = p0.y + (r0.y - p0.y) * frac;
-              const wx1 = p1.x + (r1.x - p1.x) * frac;
-              const wy1 = p1.y + (r1.y - p1.y) * frac;
-              ctx.beginPath();
-              ctx.moveTo(wx0, wy0);
-              ctx.lineTo(wx1, wy1);
-              ctx.stroke();
-            }
-          }
+        // Stepped skyscraper upper setback tier
+        if (b.setbackScale > 0 && geom.extrudePxY >= 14) {
+          const upperBase = scalePolygonAroundCentroid(geom.roofScreen, b.setbackScale);
+          const upperH = b.heightMeters * b.setbackHeightRatio;
+          const upperGeom = computeBuilding3DExtrusion(upperBase, upperH, pxPerMeter, 0.64);
+          const upperRoof = drawArchitecturalVolume(
+            ctx,
+            upperBase,
+            upperGeom.roofScreen,
+            upperGeom.extrudePxY,
+            b,
+            nightBuildings
+          );
+          topRoofScreen = upperGeom.roofScreen;
+          topRcx = upperRoof.rcx;
+          topRcy = upperRoof.rcy;
         }
 
-        // Roof cap with crisp parapet bevel
-        ctx.beginPath();
-        roofScreen.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-        ctx.closePath();
-        ctx.fillStyle = b.roofColor;
-        ctx.fill();
-        ctx.strokeStyle = b.isLandmark
-          ? 'rgba(251, 191, 36, 0.55)'
-          : 'rgba(226, 232, 240, 0.28)';
-        ctx.lineWidth = b.isLandmark ? 1.4 : 0.9;
-        ctx.stroke();
+        // Architectural rooftop details (helipad / glass skylight / HVAC / heritage dome / spire)
+        drawRooftopDetails(ctx, topRoofScreen, topRcx, topRcy, b, pxPerMeter, nightBuildings);
       }
     }
 
-    // Live oriented car markers on top of the 3D scene
+    // 5. Live Oriented Car Markers + Headlight Cones
     const listToRender =
       participants.length > 0
         ? participants
@@ -887,26 +848,33 @@ function RealWorldTileMap({
       ctx.rotate(headingRad);
 
       if (isMe) {
-        const beamGrad = ctx.createRadialGradient(8, 0, 2, 16, 0, 34);
-        beamGrad.addColorStop(0, 'rgba(250, 204, 21, 0.48)');
+        const beamGrad = ctx.createRadialGradient(8, 0, 2, 18, 0, 40);
+        beamGrad.addColorStop(0, 'rgba(250, 204, 21, 0.56)');
         beamGrad.addColorStop(1, 'rgba(250, 204, 21, 0)');
         ctx.fillStyle = beamGrad;
         ctx.beginPath();
         ctx.moveTo(4, 0);
-        ctx.arc(4, 0, 34, -0.42, 0.42);
+        ctx.arc(4, 0, 40, -0.4, 0.4);
         ctx.closePath();
         ctx.fill();
       }
 
+      // Drop shadow under car
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.beginPath();
+      ctx.roundRect(-8.5, -4, 19, 11.5, 4);
+      ctx.fill();
+
+      // Car body
       ctx.fillStyle = isMe ? '#f59e0b' : p.agenticMode ? '#10b981' : '#38bdf8';
       ctx.beginPath();
-      ctx.roundRect(-9, -5.5, 18, 11, 3.5);
+      ctx.roundRect(-9.5, -5.5, 19, 11, 3.5);
       ctx.fill();
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
       ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, -3.5, 4.5, 7);
+      ctx.fillRect(0, -3.5, 4.8, 7);
       ctx.restore();
 
       const label = `${p.name} · ${p.locationCode}`;
@@ -917,7 +885,7 @@ function RealWorldTileMap({
       const lx = Math.min(w - tw - 12, Math.max(10, clampedX + 14));
       const ly = Math.max(54, Math.min(h - 10, clampedY - 8));
 
-      ctx.fillStyle = 'rgba(9, 11, 16, 0.9)';
+      ctx.fillStyle = 'rgba(9, 11, 16, 0.92)';
       ctx.beginPath();
       ctx.roundRect(lx - 5, ly - 12, tw + 10, 17, 4);
       ctx.fill();
@@ -933,38 +901,50 @@ function RealWorldTileMap({
     myParticipantId,
     mapStyle,
     cameraMode,
+    zoomDelta,
     tileTick,
   ]);
 
   const cycleMapStyle = () => {
     setMapStyle((s) =>
-      s === 'hybrid-3d' ? 'satellite' : s === 'satellite' ? 'street' : 'hybrid-3d'
+      s === 'hybrid-3d'
+        ? 'architectural-night'
+        : s === 'architectural-night'
+          ? 'satellite'
+          : 'hybrid-3d'
     );
   };
 
   return (
     <div className="relative h-full w-full min-h-[220px] bg-[#0e161d] overflow-hidden">
-      <canvas ref={canvasRef} data-testid="gps-circuit-map" className="h-full w-full block" />
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-1 bg-[#090b10]/90 border border-white/15 p-1 rounded-lg shadow-lg">
+      <canvas
+        ref={canvasRef}
+        data-testid="gps-circuit-map"
+        data-offline-tiles={offlinePackCount}
+        className="h-full w-full block"
+      />
+
+      {/* Offline Map Controls */}
+      <div className="absolute top-3 left-3 z-10 flex items-center gap-1 bg-[#090b10]/92 border border-white/15 p-1 rounded-lg shadow-lg">
         <button
           type="button"
           onClick={cycleMapStyle}
-          className="px-2 py-1 rounded text-[11px] font-medium text-slate-200 hover:bg-white/10 flex items-center gap-1 cursor-pointer"
+          className="px-2 py-1 rounded text-[11px] font-medium text-slate-200 hover:bg-white/10 flex items-center gap-1 cursor-pointer whitespace-nowrap"
         >
           {mapStyle === 'hybrid-3d' ? (
             <>
               <Building2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>3D Hybrid</span>
+              <span>Offline 3D</span>
             </>
-          ) : mapStyle === 'satellite' ? (
+          ) : mapStyle === 'architectural-night' ? (
             <>
-              <Satellite className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Satellite</span>
+              <Moon className="w-3.5 h-3.5 text-sky-400" />
+              <span>Night 3D</span>
             </>
           ) : (
             <>
-              <MapIcon className="w-3.5 h-3.5 text-sky-400" />
-              <span>Street Map</span>
+              <Satellite className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Satellite</span>
             </>
           )}
         </button>
@@ -972,11 +952,36 @@ function RealWorldTileMap({
         <button
           type="button"
           onClick={() => setCameraMode((c) => (c === 'follow' ? 'circuit' : 'follow'))}
-          className="px-2 py-1 rounded text-[11px] font-medium text-slate-200 hover:bg-white/10 flex items-center gap-1 cursor-pointer"
+          className="px-2 py-1 rounded text-[11px] font-medium text-slate-200 hover:bg-white/10 flex items-center gap-1 cursor-pointer whitespace-nowrap"
         >
           <LocateFixed className="w-3.5 h-3.5 text-emerald-400" />
           <span>{cameraMode === 'follow' ? 'Follow' : 'Circuit'}</span>
         </button>
+        <div className="w-px h-4 bg-white/15" />
+        <button
+          type="button"
+          onClick={() => setZoomDelta((z) => Math.max(-2, z - 1))}
+          aria-label="Zoom out offline map"
+          className="p-1 rounded text-slate-200 hover:bg-white/10 cursor-pointer"
+        >
+          <Minus className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setZoomDelta((z) => Math.min(1, z + 1))}
+          aria-label="Zoom in offline map"
+          className="p-1 rounded text-slate-200 hover:bg-white/10 cursor-pointer"
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </button>
+        <div className="hidden sm:block w-px h-4 bg-white/15" />
+        <div
+          className="hidden sm:flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300/90 whitespace-nowrap"
+          title="Loaded from local bundled offline satellite tiles"
+        >
+          <HardDrive className="w-3 h-3 text-emerald-400 shrink-0" />
+          <span>Local Pack</span>
+        </div>
       </div>
     </div>
   );
@@ -991,18 +996,16 @@ export function LiveStreetViewAndMap({
   myParticipantId,
   layout,
   onLayoutChange,
+  auraMode = 'standard',
+  auraDimming = 5,
+  xrInputRef,
+  xrBridgeRef,
+  onWebXrStateChange,
 }: LiveStreetViewAndMapProps) {
-  const panoContainerRef = useRef<HTMLDivElement | null>(null);
-  const [svStatus, setSvStatus] = useState<'loading' | 'live' | 'fallback'>(
-    MAPS_API_KEY ? 'loading' : 'fallback'
-  );
-  const [mapsAuthFailed, setMapsAuthFailed] = useState(false);
-  const [driveFeed, setDriveFeed] = useState<DriveFeedMode>('3d');
   const [threeDCamIdx, setThreeDCamIdx] = useState(0);
-  const [googleMapMode, setGoogleMapMode] = useState<GoogleMapViewMode>(() =>
-    isWebGL2Available() ? '3d-hybrid' : '2d-hybrid'
-  );
-  const [googleCameraMode, setGoogleCameraMode] = useState<MapCameraMode>('follow');
+
+  const isAuraActive = auraMode !== 'standard';
+  const effectiveLayout: ViewportLayout = isAuraActive ? 'streetview' : layout;
 
   const currentCam = THREE_D_CAMERAS[threeDCamIdx];
   const cycleThreeDCam = () => setThreeDCamIdx((i) => (i + 1) % THREE_D_CAMERAS.length);
@@ -1020,30 +1023,13 @@ export function LiveStreetViewAndMap({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  useEffect(() => {
-    if (!MAPS_API_KEY) return;
-    const win = window as unknown as { gm_authFailure?: () => void };
-    const prev = win.gm_authFailure;
-    win.gm_authFailure = () => {
-      setMapsAuthFailed(true);
-      setSvStatus('fallback');
-      if (typeof prev === 'function') prev();
-    };
-    return () => {
-      win.gm_authFailure = prev;
-    };
-  }, []);
-
-  const showStreetViewPane = layout === 'split' || layout === 'streetview';
-  const showMap = layout === 'split' || layout === 'map';
-  const canShowGoogleStreetView =
-    Boolean(MAPS_API_KEY) && !mapsAuthFailed && svStatus === 'live';
-  const showingLiveStreetView = driveFeed === 'streetview' && canShowGoogleStreetView;
+  const showStreetViewPane = effectiveLayout === 'split' || effectiveLayout === 'streetview';
+  const showMap = effectiveLayout === 'split' || effectiveLayout === 'map';
 
   const streetHudBar = (
     <div
       className={`absolute top-3 left-3 z-20 flex items-center justify-between gap-2 pointer-events-none ${
-        layout === 'streetview' ? 'right-3 lg:right-[17.75rem]' : 'right-3'
+        effectiveLayout === 'streetview' ? 'right-3 lg:right-[17.75rem]' : 'right-3'
       }`}
     >
       <div className="flex items-center gap-2 min-w-0 max-w-[60%]">
@@ -1058,51 +1044,15 @@ export function LiveStreetViewAndMap({
       </div>
 
       <div className="flex items-center gap-1.5 pointer-events-auto shrink-0">
-        {/* Clean 2-mode feed selector: Photoreal 3D Circuit vs Real Google Street View */}
-        <div
-          className="flex items-center bg-[#090b10]/90 border border-white/15 p-0.5 rounded-lg"
-          role="group"
-          aria-label="Driving visual feed"
+        <button
+          type="button"
+          onClick={cycleThreeDCam}
+          title="Switch 3D Camera (C)"
+          className="flex items-center gap-1 bg-[#090b10]/90 hover:bg-[#141a26] border border-white/15 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <button
-            type="button"
-            onClick={() => setDriveFeed('3d')}
-            className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              !showingLiveStreetView
-                ? 'bg-amber-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white'
-            }`}
-          >
-            3D Circuit
-          </button>
-          {canShowGoogleStreetView && (
-            <button
-              type="button"
-              onClick={() => setDriveFeed('streetview')}
-              className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer ${
-                showingLiveStreetView
-                  ? 'bg-amber-500 text-slate-950 font-semibold'
-                  : 'text-slate-300 hover:text-white'
-              }`}
-            >
-              <Eye className="w-3 h-3" />
-              <span>Street View</span>
-            </button>
-          )}
-        </div>
-
-        {/* Camera angle selector when in Photoreal 3D Circuit mode */}
-        {!showingLiveStreetView && (
-          <button
-            type="button"
-            onClick={cycleThreeDCam}
-            title="Switch 3D Camera (C)"
-            className="flex items-center gap-1 bg-[#090b10]/90 hover:bg-[#141a26] border border-white/15 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <Camera className="w-3.5 h-3.5 text-amber-400" />
-            <span>{currentCam.label}</span>
-          </button>
-        )}
+          <Camera className="w-3.5 h-3.5 text-amber-400" />
+          <span>{currentCam.label}</span>
+        </button>
 
         <div className="hidden 2xl:flex items-center gap-1.5 bg-[#090b10]/90 border border-white/12 px-2.5 py-1.5 rounded-lg text-[11px] font-mono-tabular text-slate-300 whitespace-nowrap shrink-0">
           <Compass className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -1114,216 +1064,80 @@ export function LiveStreetViewAndMap({
     </div>
   );
 
-  const drivingViewportShell = (withGooglePano: boolean) => (
-    <div
-      data-testid="streetview-viewport"
-      className={`relative overflow-hidden bg-[#090b10] ${
-        layout === 'split'
-          ? 'h-[58%] lg:h-full lg:w-[60%] border-b lg:border-b-0 lg:border-r border-white/10'
-          : showStreetViewPane
-            ? 'h-full w-full'
-            : 'hidden'
-      }`}
-    >
-      {/* Original Photorealistic Three.js Ferrari 458 + HDRI + 3D City Landmarks */}
-      <div
-        className={`absolute inset-0 transition-opacity duration-200 ${
-          showingLiveStreetView ? 'opacity-0 pointer-events-none' : 'opacity-100'
-        }`}
-      >
-        <Photoreal3DViewport
-          circuitId={circuit.id}
-          vehicleAccentColor={vehicleAccentColor}
-          telemetryRef={liveTelemetryRef}
-          participants={participants}
-          myParticipantId={myParticipantId}
-          cameraMode={currentCam.id}
-          active={showStreetViewPane && !showingLiveStreetView}
-        />
-      </div>
-
-      {/* Unobstructed Real Google Street View Panorama (zero 2D cartoon overlay) */}
-      {withGooglePano && (
-        <div
-          ref={panoContainerRef}
-          data-testid="google-streetview-pano"
-          className={`absolute inset-0 h-full w-full min-h-[240px] transition-opacity duration-200 ${
-            showingLiveStreetView
-              ? 'opacity-100 z-[5]'
-              : 'opacity-0 pointer-events-none z-0'
-          }`}
-        />
-      )}
-
-      {streetHudBar}
-    </div>
-  );
-
-  const fallbackSplitView = (
-    <>
-      {drivingViewportShell(false)}
-      <div
-        className={`relative ${
-          layout === 'split'
-            ? 'h-[42%] lg:h-full lg:w-[40%]'
-            : showMap
-              ? 'h-full w-full'
-              : 'hidden'
-        }`}
-      >
-        <RealWorldTileMap
-          circuit={circuit}
-          roadPos={roadPos}
-          participants={participants}
-          myParticipantId={myParticipantId}
-        />
-      </div>
-    </>
-  );
-
-  const cycleGoogleMapMode = () => {
-    setGoogleMapMode((m) =>
-      m === '3d-hybrid' ? '3d-satellite' : m === '3d-satellite' ? '2d-hybrid' : '3d-hybrid'
-    );
-  };
-
   return (
     <div className="relative h-full w-full flex flex-col lg:flex-row bg-[#090b10]">
-      {/* Viewport Layout Switcher */}
-      <div
-        className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 hidden md:flex items-center gap-1 bg-[#090b10]/92 border border-white/15 p-1 rounded-lg"
-        role="group"
-        aria-label="Viewport layout mode"
-      >
-        <Layers className="w-3.5 h-3.5 text-slate-400 ml-2 mr-1" />
-        {(
-          [
-            { id: 'split', label: 'Split View' },
-            { id: 'streetview', label: '3D / Street View' },
-            { id: 'map', label: 'Map View' },
-          ] as const
-        ).map((opt) => (
-          <button
-            key={opt.id}
-            type="button"
-            onClick={() => onLayoutChange(opt.id)}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              layout === opt.id
-                ? 'bg-amber-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
-      {MAPS_API_KEY && !mapsAuthFailed ? (
-        <MapsErrorBoundary fallback={fallbackSplitView}>
-          <APIProvider
-            apiKey={MAPS_API_KEY}
-            libraries={['maps3d', 'marker', 'streetView', 'maps']}
-            language="en"
-            region="US"
-          >
-            {/* Decoupled Google Street View controller (never resets on map layer switch) */}
-            <GoogleStreetViewController
-              circuit={circuit}
-              roadPos={roadPos}
-              panoContainerRef={panoContainerRef}
-              onStreetViewStatus={setSvStatus}
-            />
-
-            {/* Photoreal 3D Circuit / Clean Realtime Google Street View Pane */}
-            {drivingViewportShell(true)}
-
-            {/* Photorealistic Satellite 3D Hybrid Map with Real 3D Buildings */}
-            <div
-              data-testid="google-map-container"
-              className={`relative transition-all duration-200 ${
-                layout === 'split'
-                  ? 'h-[42%] lg:h-full lg:w-[40%]'
-                  : showMap
-                    ? 'h-full w-full'
-                    : 'hidden'
+      {/* Viewport Layout Switcher (hidden while XR Aura spatial/stereo mode owns full canvas) */}
+      {!isAuraActive && (
+        <div
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 hidden md:flex items-center gap-1 bg-[#090b10]/92 border border-white/15 p-1 rounded-lg"
+          role="group"
+          aria-label="Viewport layout mode"
+        >
+          <Layers className="w-3.5 h-3.5 text-slate-400 ml-2 mr-1" />
+          {(
+            [
+              { id: 'split', label: 'Split View' },
+              { id: 'streetview', label: '3D View' },
+              { id: 'map', label: 'Offline Map' },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => onLayoutChange(opt.id)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                layout === opt.id
+                  ? 'bg-amber-500 text-slate-950 font-semibold'
+                  : 'text-slate-300 hover:text-white'
               }`}
             >
-              {googleMapMode === '2d-hybrid' ? (
-                <GoogleMap
-                  mapId="DEMO_MAP_ID"
-                  defaultCenter={circuit.center}
-                  defaultZoom={Math.max(16, circuit.defaultZoom + 1)}
-                  defaultTilt={45}
-                  mapTypeId="hybrid"
-                  gestureHandling="greedy"
-                  disableDefaultUI={false}
-                  streetViewControl={true}
-                  mapTypeControl={true}
-                  internalUsageAttributionIds={ATTRIBUTION_IDS}
-                  className="h-full w-full min-h-[220px]"
-                >
-                  <Google2DHybridController
-                    circuit={circuit}
-                    roadPos={roadPos}
-                    participants={participants}
-                    myParticipantId={myParticipantId}
-                    cameraMode={googleCameraMode}
-                    onAuthFailure={() => setMapsAuthFailed(true)}
-                  />
-                </GoogleMap>
-              ) : (
-                <GooglePhotorealistic3DMap
-                  circuit={circuit}
-                  roadPos={roadPos}
-                  participants={participants}
-                  myParticipantId={myParticipantId}
-                  mapMode={googleMapMode}
-                  cameraMode={googleCameraMode}
-                  onFallback2D={() => setGoogleMapMode('2d-hybrid')}
-                />
-              )}
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
 
-              {/* Satellite 3D Hybrid / 3D Satellite / 2D Hybrid & Camera Controls */}
-              <div className="absolute top-3 left-3 z-20 flex items-center gap-1 bg-[#090b10]/90 border border-white/15 p-1 rounded-lg shadow-lg">
-                <button
-                  type="button"
-                  onClick={cycleGoogleMapMode}
-                  className="px-2 py-1 rounded text-[11px] font-medium text-slate-200 hover:bg-white/10 flex items-center gap-1 cursor-pointer"
-                >
-                  {googleMapMode === '3d-hybrid' ? (
-                    <>
-                      <Building2 className="w-3.5 h-3.5 text-amber-400" />
-                      <span>3D Hybrid</span>
-                    </>
-                  ) : googleMapMode === '3d-satellite' ? (
-                    <>
-                      <Satellite className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>3D Satellite</span>
-                    </>
-                  ) : (
-                    <>
-                      <MapIcon className="w-3.5 h-3.5 text-sky-400" />
-                      <span>2D Hybrid</span>
-                    </>
-                  )}
-                </button>
-                <div className="w-px h-4 bg-white/15" />
-                <button
-                  type="button"
-                  onClick={() =>
-                    setGoogleCameraMode((c) => (c === 'follow' ? 'circuit' : 'follow'))
-                  }
-                  className="px-2 py-1 rounded text-[11px] font-medium text-slate-200 hover:bg-white/10 flex items-center gap-1 cursor-pointer"
-                >
-                  <LocateFixed className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{googleCameraMode === 'follow' ? 'Follow' : 'Circuit'}</span>
-                </button>
-              </div>
-            </div>
-          </APIProvider>
-        </MapsErrorBoundary>
-      ) : (
-        fallbackSplitView
+      {/* Photorealistic 3D City Driving Viewport */}
+      {showStreetViewPane && (
+        <div
+          className={`relative bg-[#090b10] overflow-hidden ${
+            effectiveLayout === 'split'
+              ? 'h-[58%] lg:h-full lg:w-[64%] border-b lg:border-b-0 lg:border-r border-white/10'
+              : 'h-full w-full'
+          }`}
+        >
+          <Photoreal3DViewport
+            circuitId={circuit.id}
+            telemetryRef={liveTelemetryRef}
+            vehicleAccentColor={vehicleAccentColor}
+            participants={participants}
+            myParticipantId={myParticipantId}
+            cameraMode={currentCam.id}
+            active={showStreetViewPane}
+            auraMode={auraMode}
+            auraDimming={auraDimming}
+            xrInputRef={xrInputRef}
+            xrBridgeRef={xrBridgeRef}
+            onWebXrStateChange={onWebXrStateChange}
+          />
+          {!isAuraActive && streetHudBar}
+        </div>
+      )}
+
+      {/* 100% Local Offline 3D Satellite Map Pane */}
+      {showMap && (
+        <div
+          className={`relative bg-[#0e161d] overflow-hidden ${
+            effectiveLayout === 'split' ? 'h-[42%] lg:h-full lg:w-[36%]' : 'h-full w-full'
+          }`}
+        >
+          <Offline3DSatelliteMap
+            circuit={circuit}
+            roadPos={roadPos}
+            participants={participants}
+            myParticipantId={myParticipantId}
+          />
+        </div>
       )}
     </div>
   );

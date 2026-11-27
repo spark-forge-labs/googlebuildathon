@@ -8,7 +8,7 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', '@vis.gl/react-google-maps'],
+    include: ['react', 'react-dom'],
   },
   server: {
     host: '0.0.0.0',

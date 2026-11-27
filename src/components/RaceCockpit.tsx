@@ -1,14 +1,18 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  Eye,
   Flag,
   Flame,
+  Glasses,
   LogOut,
   Music,
+  Sun,
   Users,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { getCircuitById, getVehicleById } from '../game/circuits';
 import {
@@ -25,10 +29,19 @@ import {
   getRaceTimeline,
   type AgenticInputType,
 } from '../game/raceSchedule';
+import {
+  detectXrAuraCapabilities,
+  extractGamepadDrivingInput,
+  getAuraDimmingConfig,
+  type AuraDimmingLevel,
+  type AuraViewMode,
+  type XrAuraCapabilities,
+  type XrDrivingInput,
+} from '../game/xrAura';
 import type { AgenticServerEvent, LiveParticipant, RoomStatePayload } from '../types/race';
 import { AgenticIgnitionPad } from './AgenticIgnitionPad';
 import { LiveStreetViewAndMap, type ViewportLayout } from './LiveStreetViewAndMap';
-import type { LiveThreeDTelemetry } from './Photoreal3DViewport';
+import type { LiveThreeDTelemetry, XrSessionBridge } from './Photoreal3DViewport';
 
 interface RaceCockpitProps {
   roomState: RoomStatePayload;
@@ -65,6 +78,8 @@ interface RaceCockpitProps {
   onCountdownBeep: (isGo: boolean) => void;
   onAgenticChargeTick: (progress01: number) => void;
   onAgenticEngagedAudio: () => void;
+  initialAuraMode?: AuraViewMode;
+  onAuraModeChange?: (mode: AuraViewMode) => void;
 }
 
 export function RaceCockpit({
@@ -89,6 +104,8 @@ export function RaceCockpit({
   onCountdownBeep,
   onAgenticChargeTick,
   onAgenticEngagedAudio,
+  initialAuraMode = 'standard',
+  onAuraModeChange,
 }: RaceCockpitProps) {
   const circuit = useMemo(() => getCircuitById(roomState.circuitId), [roomState.circuitId]);
   const metrics = useMemo(() => buildCircuitMetrics(circuit.waypoints), [circuit]);
@@ -96,6 +113,89 @@ export function RaceCockpit({
 
   const [layout, setLayout] = useState<ViewportLayout>('split');
   const [showMobileStandings, setShowMobileStandings] = useState(false);
+
+  // XREAL Aura / Android XR Spatial State
+  const [auraMode, setAuraModeState] = useState<AuraViewMode>(initialAuraMode);
+  const [auraDimming, setAuraDimming] = useState<AuraDimmingLevel>(5);
+  const [xrCaps, setXrCaps] = useState<XrAuraCapabilities>({
+    webXrAvailable: false,
+    supportsImmersiveAr: false,
+    supportsImmersiveVr: false,
+    recommendedMode: 'aura-spatial',
+  });
+  const [xrNotice, setXrNotice] = useState<string | null>(null);
+  const xrBridgeRef = useRef<XrSessionBridge | null>(null);
+  const xrInputRef = useRef<XrDrivingInput>({
+    active: false,
+    source: 'none',
+    steer: 0,
+    throttle: 0,
+    brake: 0,
+    nitro: false,
+    dualPinchHold: false,
+    handsTracked: 0,
+  });
+
+  const setAuraMode = useCallback(
+    (next: AuraViewMode) => {
+      setAuraModeState(next);
+      onAuraModeChange?.(next);
+    },
+    [onAuraModeChange]
+  );
+
+  useEffect(() => {
+    let active = true;
+    detectXrAuraCapabilities().then((caps) => {
+      if (active) setXrCaps(caps);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleWebXrStateChange = useCallback(
+    (activeMode: 'immersive-ar' | 'immersive-vr' | null, error?: string) => {
+      if (activeMode === 'immersive-ar') {
+        setAuraMode('aura-webxr-ar');
+        setAuraDimming(1);
+        setXrNotice(null);
+      } else if (activeMode === 'immersive-vr') {
+        setAuraMode('aura-webxr-vr');
+        setAuraDimming(5);
+        setXrNotice(null);
+      } else {
+        setAuraModeState((prev) =>
+          prev === 'aura-webxr-ar' || prev === 'aura-webxr-vr' ? 'aura-spatial' : prev
+        );
+        if (error) setXrNotice(error);
+      }
+    },
+    [setAuraMode]
+  );
+
+  const handleToggleAuraMode = useCallback(() => {
+    setXrNotice(null);
+    if (auraMode !== 'standard') {
+      xrBridgeRef.current?.endWebXrSession().catch(() => {});
+      setAuraMode('standard');
+      setAuraDimming(5);
+    } else {
+      setAuraMode('aura-spatial');
+      setAuraDimming(5);
+    }
+  }, [auraMode, setAuraMode]);
+
+  const handleLaunchWebXr = useCallback(
+    async (mode: 'immersive-ar' | 'immersive-vr') => {
+      setXrNotice(null);
+      const ok = await xrBridgeRef.current?.startWebXrSession(mode);
+      if (!ok) {
+        setAuraMode('aura-spatial');
+      }
+    },
+    [setAuraMode]
+  );
 
   const me = useMemo(
     () => roomState.participants.find((p) => p.id === myParticipantId) ?? null,
@@ -160,7 +260,7 @@ export function RaceCockpit({
   );
   const [agenticDecision, setAgenticDecision] = useState<string>('Autonomous Racing Line Active');
 
-  // Keyboard driving controls (WASD / Arrows / Shift Nitro / M SFX Mute / B Music Toggle)
+  // Keyboard driving controls (WASD / Arrows / Shift Nitro / M SFX Mute / B Music Toggle / X XR Aura / Esc Exit XR)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'KeyM' && !e.repeat) {
@@ -169,6 +269,17 @@ export function RaceCockpit({
       }
       if (e.code === 'KeyB' && !e.repeat) {
         onToggleMusic();
+        return;
+      }
+      if (e.code === 'KeyX' && !e.repeat) {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+          handleToggleAuraMode();
+          return;
+        }
+      }
+      if (e.code === 'Escape' && auraMode !== 'standard') {
+        handleToggleAuraMode();
         return;
       }
       keysRef.current.add(e.code);
@@ -188,7 +299,7 @@ export function RaceCockpit({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [onToggleMute, onToggleMusic]);
+  }, [onToggleMute, onToggleMusic, handleToggleAuraMode, auraMode]);
 
   // Reset physics on new race start
   useEffect(() => {
@@ -238,12 +349,25 @@ export function RaceCockpit({
         } else {
           const k = keysRef.current;
           const t = touchInputRef.current;
-          const gas = k.has('KeyW') || k.has('ArrowUp') ? 1 : t.throttle;
-          const brake = k.has('KeyS') || k.has('ArrowDown') ? 1 : t.brake;
+          const xr = xrInputRef.current;
+          const btPad =
+            typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function'
+              ? extractGamepadDrivingInput(navigator.getGamepads(), 'gamepad')
+              : null;
+
+          const kbGas = k.has('KeyW') || k.has('ArrowUp') ? 1 : t.throttle;
+          const kbBrake = k.has('KeyS') || k.has('ArrowDown') ? 1 : t.brake;
           const left = k.has('KeyA') || k.has('ArrowLeft') ? -1 : 0;
           const right = k.has('KeyD') || k.has('ArrowRight') ? 1 : 0;
-          const steer = left + right !== 0 ? left + right : t.steer;
-          const nitro = k.has('ShiftLeft') || k.has('ShiftRight') || t.nitro;
+          const kbSteer = left + right !== 0 ? left + right : t.steer;
+          const kbNitro = k.has('ShiftLeft') || k.has('ShiftRight') || t.nitro;
+
+          // Blend XREAL Aura 6DoF hand-tracking / puck touchpad / Bluetooth gamepad seamlessly with keyboard & touch
+          const extInput = xr.active ? xr : btPad && btPad.active ? btPad : null;
+          const gas = Math.max(kbGas, extInput ? extInput.throttle : 0);
+          const brake = Math.max(kbBrake, extInput ? extInput.brake : 0);
+          const steer = kbSteer !== 0 ? kbSteer : extInput ? extInput.steer : 0;
+          const nitro = kbNitro || (extInput ? extInput.nitro : false);
 
           // Gentle auto-cruise baseline if player hasn't pressed pedals yet so Street View stays alive,
           // while full throttle / braking / nitro gives competitive racing pace
@@ -320,15 +444,22 @@ export function RaceCockpit({
         isEngineActive
       );
 
-      // Always keep 3D renderer telemetry ref updated at full 60Hz (countdown + racing)
+      // Always keep 3D & XR Aura Spatial HUD telemetry ref updated at full 60Hz (countdown + racing)
       const latestRoad = interpolateCircuitPosition(
         circuit.waypoints,
         physicsRef.current.distanceMeters,
         metrics
       );
+      const myDist = physicsRef.current.distanceMeters;
+      let liveRank = 1;
+      for (const p of participantsRef.current) {
+        if (p.id !== myParticipantId && p.distanceMeters > myDist) {
+          liveRank++;
+        }
+      }
       liveTelemetryRef.current = {
         lapProgress01: latestRoad.lapProgress,
-        distanceMeters: physicsRef.current.distanceMeters,
+        distanceMeters: myDist,
         lapLengthMeters: metrics.totalLapMeters,
         speedKmh: physicsRef.current.speedKmh,
         steeringOffset: physicsRef.current.steeringOffset,
@@ -336,6 +467,14 @@ export function RaceCockpit({
         isBraking: physicsRef.current.isBraking,
         phase: timelineRef.current.phase,
         countdownSecondsLeft: timelineRef.current.countdownSecondsLeft,
+        gear: physicsRef.current.gear,
+        nitroPercent: physicsRef.current.nitroPercent,
+        rank: liveRank,
+        totalRacers: Math.max(1, participantsRef.current.length),
+        lap: latestRoad.lap,
+        remainingClock: formatClockMs(timelineRef.current.remainingMs),
+        circuitName: circuit.name,
+        landmark: latestRoad.currentLandmark,
       };
 
       rafId = requestAnimationFrame(loop);
@@ -452,6 +591,24 @@ export function RaceCockpit({
 
           <button
             type="button"
+            data-testid="toggle-xr-aura-btn"
+            onClick={handleToggleAuraMode}
+            title="Toggle XREAL Aura Spatial / WebXR Mode (X)"
+            aria-pressed={auraMode !== 'standard'}
+            className={`min-h-[36px] px-2.5 rounded-md border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              auraMode !== 'standard'
+                ? 'bg-sky-500/20 hover:bg-sky-500/30 border-sky-400/50 text-sky-200'
+                : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-200'
+            }`}
+          >
+            <Glasses className={`w-3.5 h-3.5 ${auraMode !== 'standard' ? 'text-sky-300' : 'text-sky-400'}`} />
+            <span className="hidden sm:inline">
+              {auraMode !== 'standard' ? 'XR Aura On' : 'XR Aura'}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={onToggleMusic}
             title={musicMuted ? 'Enable city soundtrack (B)' : 'Mute city soundtrack (B)'}
             aria-label={musicMuted ? 'Enable city soundtrack' : 'Mute city soundtrack'}
@@ -488,7 +645,7 @@ export function RaceCockpit({
         </div>
       </header>
 
-      {/* Main Racing Viewport (Realtime Street View + Synchronized Google Map) */}
+      {/* Main Racing Viewport (Realtime Street View + Synchronized Google Map + XREAL Aura WebXR/SBS) */}
       <div className="relative flex-1 min-h-0 w-full">
         <LiveStreetViewAndMap
           circuit={circuit}
@@ -499,10 +656,136 @@ export function RaceCockpit({
           myParticipantId={myParticipantId}
           layout={layout}
           onLayoutChange={setLayout}
+          auraMode={auraMode}
+          auraDimming={auraDimming}
+          xrInputRef={xrInputRef}
+          xrBridgeRef={xrBridgeRef}
+          onWebXrStateChange={handleWebXrStateChange}
         />
 
-        {/* 10-Second Starting Lights Countdown Overlay */}
-        {timeline.phase === 'countdown' && (
+        {/* XREAL Aura Spatial Control Bar & WebXR DOM Overlay */}
+        {auraMode !== 'standard' && (
+          <div
+            id="aura-xr-dom-overlay"
+            data-testid="xr-aura-control-bar"
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-[#090d16]/94 border border-sky-400/35 rounded-xl px-3 py-2 shadow-2xl max-w-[94vw]"
+          >
+            <div className="flex items-center gap-1.5 pr-2 border-r border-white/12">
+              <Glasses className="w-4 h-4 text-sky-400 shrink-0" />
+              <span className="font-display text-xs font-bold text-white whitespace-nowrap">
+                XREAL Aura
+              </span>
+              <span className="text-[10px] font-mono-tabular text-sky-300 whitespace-nowrap">
+                70° Micro-OLED
+              </span>
+            </div>
+
+            {/* Spatial Output Modes: Native Android XR WebXR AR/VR | 70° Spatial | DP-in 3D Stereo SBS */}
+            <div className="flex items-center gap-1" role="group" aria-label="XR Aura display mode">
+              {xrCaps.supportsImmersiveAr && (
+                <button
+                  type="button"
+                  onClick={() => handleLaunchWebXr('immersive-ar')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
+                    auraMode === 'aura-webxr-ar'
+                      ? 'bg-sky-400 text-slate-950'
+                      : 'bg-white/5 hover:bg-white/10 text-sky-200'
+                  }`}
+                >
+                  WebXR AR
+                </button>
+              )}
+              {xrCaps.supportsImmersiveVr && (
+                <button
+                  type="button"
+                  onClick={() => handleLaunchWebXr('immersive-vr')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
+                    auraMode === 'aura-webxr-vr'
+                      ? 'bg-sky-400 text-slate-950'
+                      : 'bg-white/5 hover:bg-white/10 text-sky-200'
+                  }`}
+                >
+                  WebXR VR
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  xrBridgeRef.current?.endWebXrSession().catch(() => {});
+                  setAuraMode('aura-spatial');
+                }}
+                className={`px-2 py-1 rounded-md text-[11px] font-semibold cursor-pointer whitespace-nowrap ${
+                  auraMode === 'aura-spatial'
+                    ? 'bg-amber-500 text-slate-950'
+                    : 'bg-white/5 hover:bg-white/10 text-slate-200'
+                }`}
+              >
+                70° Spatial
+              </button>
+              <button
+                type="button"
+                data-testid="aura-sbs-btn"
+                onClick={() => {
+                  xrBridgeRef.current?.endWebXrSession().catch(() => {});
+                  setAuraMode('aura-sbs');
+                }}
+                className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+                  auraMode === 'aura-sbs'
+                    ? 'bg-sky-400 text-slate-950'
+                    : 'bg-white/5 hover:bg-white/10 text-slate-200'
+                }`}
+              >
+                <Eye className="w-3 h-3" />
+                <span>DP-in 3D SBS</span>
+              </button>
+            </div>
+
+            {/* 5-Level Electrochromic Dimmer */}
+            <div
+              className="flex items-center gap-1 pl-2 border-l border-white/12"
+              role="group"
+              aria-label="Electrochromic dimming level"
+              title={`Electrochromic Dimmer: ${getAuraDimmingConfig(auraDimming).label}`}
+            >
+              <Sun className="w-3.5 h-3.5 text-amber-400 mr-0.5 shrink-0" />
+              {([1, 2, 3, 4, 5] as const).map((lvl) => (
+                <button
+                  key={lvl}
+                  type="button"
+                  onClick={() => setAuraDimming(lvl)}
+                  aria-pressed={auraDimming === lvl}
+                  title={getAuraDimmingConfig(lvl).label}
+                  className={`w-6 h-6 rounded text-[10px] font-mono-tabular font-bold transition-colors cursor-pointer ${
+                    auraDimming === lvl
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-white/8 hover:bg-white/15 text-slate-300'
+                  }`}
+                >
+                  {lvl}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleToggleAuraMode}
+              title="Exit XR Aura Mode (Esc)"
+              aria-label="Exit XR Aura Mode"
+              className="w-7 h-7 rounded-md bg-white/8 hover:bg-rose-500/25 text-slate-300 hover:text-white flex items-center justify-center cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+
+            {xrNotice && (
+              <div className="w-full text-center text-[10px] text-amber-300 pt-0.5">
+                {xrNotice}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 10-Second Starting Lights Countdown Overlay (rendered in 3D holographic visor during DP-in SBS) */}
+        {timeline.phase === 'countdown' && auraMode !== 'aura-sbs' && (
           <div
             data-testid="countdown-overlay"
             className="pointer-events-none absolute inset-x-0 top-20 sm:top-16 z-20 flex flex-col items-center px-4"
@@ -535,13 +818,14 @@ export function RaceCockpit({
           </div>
         )}
 
-        {/* Live Multi-Location Standings Rail (Desktop top-right, Mobile toggle) */}
-        <aside
-          className={`absolute top-3 right-3 z-20 w-64 bg-[#0b0f17]/92 border border-white/12 rounded-xl p-3 shadow-xl ${
-            showMobileStandings ? 'block' : 'hidden lg:block'
-          }`}
-          aria-label="Live race standings"
-        >
+        {/* Live Multi-Location Standings Rail (Desktop top-right, hidden in DP-in 3D Stereo SBS) */}
+        {auraMode !== 'aura-sbs' && (
+          <aside
+            className={`absolute top-3 right-3 z-20 w-64 bg-[#0b0f17]/92 border border-white/12 rounded-xl p-3 shadow-xl ${
+              showMobileStandings ? 'block' : 'hidden lg:block'
+            }`}
+            aria-label="Live race standings"
+          >
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300 pb-2 border-b border-white/8">
             <span>Live Standings</span>
             <span className="font-mono-tabular text-slate-400">
@@ -574,11 +858,13 @@ export function RaceCockpit({
               </li>
             ))}
           </ul>
-        </aside>
+          </aside>
+        )}
       </div>
 
-      {/* Responsive Bottom Controls: Non-overlapping Dock on Mobile (< md), Floating Corner HUD on Desktop (md+) */}
-      <div className="relative z-20 shrink-0 bg-[#0b0f17] border-t border-white/10 p-2.5 flex flex-col-reverse gap-2 md:pointer-events-none md:absolute md:inset-x-0 md:bottom-0 md:bg-transparent md:border-t-0 md:p-4 md:flex-row md:items-end md:justify-between">
+      {/* Responsive Bottom Controls: Hidden in DP-in 3D Stereo SBS so dual eyes show pure stereoscopic 3D HUD */}
+      {auraMode !== 'aura-sbs' && (
+        <div className="relative z-20 shrink-0 bg-[#0b0f17] border-t border-white/10 p-2.5 flex flex-col-reverse gap-2 md:pointer-events-none md:absolute md:inset-x-0 md:bottom-0 md:bg-transparent md:border-t-0 md:p-4 md:flex-row md:items-end md:justify-between">
         {/* Human Hand-Press Agentic Ignition Pad (Thumb Zone on Mobile, Bottom-Left on Desktop) */}
         <div className="w-full md:pointer-events-auto md:w-auto md:max-w-[340px]">
           <AgenticIgnitionPad
@@ -682,7 +968,8 @@ export function RaceCockpit({
             </div>
           </div>
         </div>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
